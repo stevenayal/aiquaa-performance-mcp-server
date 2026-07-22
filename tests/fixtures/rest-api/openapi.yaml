@@ -1,0 +1,7 @@
+openapi: 3.0.3
+info: { title: Fixture API, version: 1.0.0 }
+paths:
+  /login:
+    post: { operationId: login, responses: { '200': { description: OK } } }
+  /accounts/{accountId}/transactions:
+    post: { operationId: createTransaction, responses: { '201': { description: Created } } }

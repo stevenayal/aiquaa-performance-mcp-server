@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.env
+.codegraph/
+test-results/performance/
+*.log
+apache-jmeter-*/

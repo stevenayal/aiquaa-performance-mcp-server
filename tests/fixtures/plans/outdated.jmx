@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan><hashTree><TestPlan testname="Outdated"/><hashTree><ThreadGroup testname="stress"><stringProp name="ThreadGroup.num_threads">1000</stringProp><stringProp name="ThreadGroup.ramp_time">0</stringProp></ThreadGroup><hashTree><HTTPSamplerProxy testname="old endpoint"/><hashTree/><ResultCollector testname="View Results Tree"/></hashTree></hashTree></hashTree></jmeterTestPlan>

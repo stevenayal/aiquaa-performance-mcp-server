@@ -1,0 +1,64 @@
+{
+  "name": "aiquaa-performance-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for safe JMeter performance-test analysis, generation, execution and reporting.",
+  "type": "module",
+  "bin": {
+    "aiquaa-performance-mcp-server": "dist/server.js"
+  },
+  "exports": "./dist/app.js",
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "test": "vitest run --coverage",
+    "check": "npm run lint && npm run build && npm test",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@octokit/rest": "^22.0.0",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.3.4",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.19.19",
+    "@vitest/coverage-v8": "^3.2.4",
+    "eslint": "^9.39.2",
+    "prettier": "^3.8.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1",
+    "vitest": "^3.2.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stevenayal/aiquaa-performance-mcp-server.git"
+  },
+  "keywords": [
+    "mcp",
+    "jmeter",
+    "performance",
+    "load-testing",
+    "aiquaa"
+  ]
+}
