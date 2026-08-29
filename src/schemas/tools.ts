@@ -125,6 +125,22 @@ export const PipelineInputSchema = z
     response_format: ResponseFormatSchema,
   })
   .strict();
+export const ReportInputSchema = z
+  .object({
+    jtl: z.string().min(1),
+    baseline_jtl: z.string().optional(),
+    thresholds: z.array(ThresholdSchema).default([]),
+    environment_stable: z.boolean().default(true),
+    api_name: z.string().min(1).default("API"),
+    test_type: TestTypeSchema.optional(),
+    threads: z.number().int().positive().optional(),
+    loops: z.number().int().optional(),
+    api_version: z.string().optional(),
+    repo_url: z.string().optional(),
+    author: z.string().optional(),
+    output_path: z.string().default("test-results/performance/INFORME_PERF.pdf"),
+  })
+  .strict();
 export const ChangesInputSchema = z
   .object({
     analysis: z.record(z.unknown()),

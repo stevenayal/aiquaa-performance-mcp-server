@@ -10,6 +10,7 @@ import { evaluateExecution, redactSecrets, safeRelativePath } from "./security/p
 import { planPullRequest } from "./github/pull-request.js";
 import { RequirementSchema } from "./schemas/common.js";
 import { evaluateThreshold } from "./thresholds/evaluate.js";
+import { buildPdfReport } from "./reporting/pdf.js";
 
 const jtl = (elapsed: number[]): string =>
   `timeStamp,elapsed,label,responseCode,responseMessage,success,bytes\n${elapsed.map((v, i) => `${1700000000000 + i * 1000},${v},GET users,200,OK,true,100`).join("\n")}\n`;
@@ -135,6 +136,35 @@ describe("results and comparisons", () => {
     expect(evaluateThreshold(metric, { scope: "global", p95Ms: 500 })).toBe("PASS");
     expect(evaluateThreshold(metric, { scope: "global", p95Ms: 50 })).toBe("FAIL");
     expect(evaluateThreshold(metric)).toBe("INCONCLUSIVE");
+  });
+});
+describe("PDF reporting", () => {
+  it("renders a valid PDF with cover, verdict and sampler detail", async () => {
+    const summary = analyzeJtl(jtl([100, 200, 300, 400]), [
+      { scope: "global", p95Ms: 500, maxErrorRate: 1 },
+    ]);
+    const pdf = await buildPdfReport({
+      summary,
+      thresholds: [{ scope: "global", p95Ms: 500, maxErrorRate: 1 }],
+      apiName: "Demo API",
+      testType: "smoke",
+      threads: 1,
+      loops: 1,
+    });
+    expect(pdf.subarray(0, 4).toString("latin1")).toBe("%PDF");
+    expect(pdf.length).toBeGreaterThan(1000);
+  });
+  it("renders a baseline comparison table when provided", async () => {
+    const candidateJtl = jtl([200, 200, 200, 200]);
+    const summary = analyzeJtl(candidateJtl, [{ scope: "global", p95Ms: 500 }]);
+    const comparison = compareJtl(jtl([100, 100, 100, 100]), candidateJtl, [], {}, {}, 10);
+    const pdf = await buildPdfReport({
+      summary,
+      comparison,
+      thresholds: [{ scope: "global", p95Ms: 500 }],
+      apiName: "Demo API",
+    });
+    expect(pdf.subarray(0, 4).toString("latin1")).toBe("%PDF");
   });
 });
 describe("security and PR planning", () => {
