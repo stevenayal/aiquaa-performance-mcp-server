@@ -67,8 +67,11 @@ Las operaciones de lectura son puras. La generación devuelve archivos, pero no 
 | `perf_pipeline`   | GitHub Actions o Azure Pipelines headless con artifacts y thresholds                 |
 | `perf_cambios`    | Plan previo de archivos, cobertura estimada, riesgo y supuestos                      |
 | `perf_pr`         | Plan dry-run o rama + archivos + draft PR mediante Octokit                           |
+| `perf_informe`    | Informe PDF (portada, veredicto, percentiles, comparación, detalle por sampler)      |
 
-Todas aceptan `response_format`: `json`, `markdown`, `files` o `patch`.
+Todas aceptan `response_format`: `json`, `markdown`, `files` o `patch`, salvo `perf_informe`,
+que siempre devuelve el PDF embebido en base64 (`resource` con `mimeType: application/pdf`)
+junto a un resumen en texto; el cliente decide si lo persiste.
 
 ## Modelos y presets
 
@@ -172,7 +175,7 @@ Orden recomendado: `perf_analizar` → `perf_requisitos` → `perf_escenario` �
 
 ## Reutilización y diferencias respecto a las referencias
 
-De `aiquaa-labs/jmeter-skill` se conservaron nombres `P_`, `D_`, `R_`, generación JMX/CSV, ejecución non-GUI, dashboard, CI, reparación y reporting. El cambio deliberado es que 1000×30 dejó de ser universal y pasó a `aiquaa_stress` con riesgo explícito.
+De `aiquaa-labs/jmeter-skill` se conservaron nombres `P_`, `D_`, `R_`, generación JMX/CSV, ejecución non-GUI, dashboard, CI, reparación y reporting. El cambio deliberado es que 1000×30 dejó de ser universal y pasó a `aiquaa_stress` con riesgo explícito. El diseño del informe PDF (`perf_informe`: portada, banda de estadísticas, percentiles, veredicto, comparación con línea base, detalle por sampler, top errores) reproduce el de `reporter/jmeter_report.py` de ese repo, mismo layout pero reimplementado en TypeScript con `pdfkit` para no requerir Python/pandas/reportlab en el servidor MCP.
 
 De `aiquaa-playwright-mcp-server` se reutilizó el patrón de `McpServer` + Streamable HTTP sin estado, schemas Zod estrictos, adaptadores AIQUAA/CodeGraph/Engram, respuestas estructuradas y procesos sin shell. Performance agrega policy centralizada, análisis XML/JTL, comparabilidad y efectos externos bloqueados por defecto.
 
@@ -181,5 +184,5 @@ De `aiquaa-playwright-mcp-server` se reutilizó el patrón de `McpServer` + Stre
 - El modelo abierto genera `ArrivalsThreadGroup` y requiere instalar JMeter Plugins Custom Thread Groups; `perf_validar` lo declara como dependencia antes de ejecutar.
 - El análisis estático local detecta señales, no capacidad real ni topología desplegada.
 - Los percentiles se calculan en memoria; aplique límites externos para JTL muy grandes.
-- La generación de PDF se delega al dashboard/reporting del pipeline; esta versión analiza y produce JSON/Markdown, pero no maqueta el PDF directamente.
+- `perf_informe` genera el PDF con `pdfkit` (sin dependencias de Python) a partir de lo que ya calcula `perf_resultados`/`perf_comparar`; el dashboard HTML de JMeter (`-e -o`) sigue siendo aparte, vía los pipelines de `perf_pipeline`.
 - La ampliación localizada usa nombres de sampler como clave de identidad; renombres manuales pueden requerir revisión.

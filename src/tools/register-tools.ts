@@ -9,6 +9,7 @@ import {
   GenerateInputSchema,
   PipelineInputSchema,
   PullRequestInputSchema,
+  ReportInputSchema,
   RequirementsInputSchema,
   ResultsInputSchema,
   ScenarioInputObjectSchema,
@@ -28,6 +29,7 @@ import { perfComparar } from "./perf-comparar.js";
 import { perfPipeline } from "./perf-pipeline.js";
 import { perfCambios } from "./perf-cambios.js";
 import { perfPr } from "./perf-pr.js";
+import { perfInforme } from "./perf-informe.js";
 
 const readOnly = {
   readOnlyHint: true,
@@ -211,6 +213,44 @@ export function registerTools(server: McpServer): void {
       safe(() => {
         const input = ChangesInputSchema.parse(raw);
         return result(input.response_format, perfCambios(input));
+      }),
+  );
+  server.registerTool(
+    "perf_informe",
+    {
+      title: "Generar informe PDF",
+      description:
+        "Genera un informe PDF (portada, veredicto, percentiles, comparación opcional con baseline y detalle por sampler) a partir de un JTL ya calculado por perf_resultados. Devuelve el PDF embebido en base64; el cliente decide si lo persiste.",
+      inputSchema: ReportInputSchema.shape,
+      annotations: localWrite,
+    },
+    async (raw) =>
+      safe(async () => {
+        const input = ReportInputSchema.parse(raw);
+        const report = await perfInforme(input);
+        return {
+          content: [
+            {
+              type: "text",
+              text: [
+                `Informe generado: ${report.path}`,
+                `Veredicto: ${report.summary.verdict}`,
+                `Muestras: ${report.summary.samples}`,
+                `Error rate: ${report.summary.errorRate.toFixed(2)}%`,
+                `P95: ${report.summary.p95Ms} ms`,
+              ].join("\n"),
+            },
+            {
+              type: "resource" as const,
+              resource: {
+                uri: `file://${report.path}`,
+                mimeType: "application/pdf",
+                blob: report.content,
+              },
+            },
+          ],
+          structuredContent: { path: report.path, verdict: report.summary.verdict },
+        };
       }),
   );
   server.registerTool(
