@@ -1,0 +1,33 @@
+name: JMeter NASAAPOD
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install JMeter
+        run: |
+          curl --fail --location --silent --show-error https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz -o jmeter.tgz
+          tar -xzf jmeter.tgz
+      - name: Run headless
+        # api.nasa.gov is public; the plan's host/port/protocol properties
+        # already default to it from perf_generar, so no PERF_BASE_URL
+        # secret is needed for this specific smoke target.
+        run: |
+          mkdir -p test-results/performance/dashboard
+          apache-jmeter-5.6.3/bin/jmeter -n -t tests/performance/plans/P_NASAAPOD.jmx -l test-results/performance/R_NASAAPOD.jtl -e -o test-results/performance/dashboard
+      - name: Evaluate thresholds
+        run: npx -y aiquaa-performance-mcp-server --evaluate test-results/performance/R_NASAAPOD.jtl tests/performance/thresholds/thresholds.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jmeter-NASAAPOD
+          path: test-results/performance
