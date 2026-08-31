@@ -14,6 +14,7 @@ import {
   ResultsInputSchema,
   ScenarioInputObjectSchema,
   ScenarioInputSchema,
+  TelemetryInputSchema,
   ValidateInputSchema,
 } from "../schemas/tools.js";
 import type { ResponseFormat } from "../types.js";
@@ -30,6 +31,8 @@ import { perfPipeline } from "./perf-pipeline.js";
 import { perfCambios } from "./perf-cambios.js";
 import { perfPr } from "./perf-pr.js";
 import { perfInforme } from "./perf-informe.js";
+import { perfTelemetria } from "./perf-telemetria.js";
+import { recordToolUsage } from "../telemetry/tokens.js";
 
 const readOnly = {
   readOnlyHint: true,
@@ -60,7 +63,7 @@ export function registerTools(server: McpServer): void {
       annotations: readOnly,
     },
     async (raw) =>
-      safe(async () => {
+      safe("perf_analizar", raw, async () => {
         const input = AnalyzeInputSchema.parse(raw);
         return result(input.response_format, await perfAnalizar(input));
       }),
@@ -75,7 +78,7 @@ export function registerTools(server: McpServer): void {
       annotations: readOnly,
     },
     async (raw) =>
-      safe(() => {
+      safe("perf_requisitos", raw, () => {
         const input = RequirementsInputSchema.parse(raw);
         return result(input.response_format, perfRequisitos(input));
       }),
@@ -90,7 +93,7 @@ export function registerTools(server: McpServer): void {
       annotations: readOnly,
     },
     async (raw) =>
-      safe(() => {
+      safe("perf_escenario", raw, () => {
         const input = ScenarioInputSchema.parse(raw);
         return result(input.response_format, perfEscenario(input));
       }),
@@ -105,7 +108,7 @@ export function registerTools(server: McpServer): void {
       annotations: readOnly,
     },
     async (raw) =>
-      safe(() => {
+      safe("perf_cobertura", raw, () => {
         const input = CoverageInputSchema.parse(raw);
         return result(input.response_format, perfCobertura(input));
       }),
@@ -120,7 +123,7 @@ export function registerTools(server: McpServer): void {
       annotations: localWrite,
     },
     async (raw) =>
-      safe(() => {
+      safe("perf_generar", raw, () => {
         const input = GenerateInputSchema.parse(raw);
         return result(input.response_format, perfGenerar(input));
       }),
@@ -135,7 +138,7 @@ export function registerTools(server: McpServer): void {
       annotations: readOnly,
     },
     async (raw) =>
-      safe(() => {
+      safe("perf_validar", raw, () => {
         const input = ValidateInputSchema.parse(raw);
         return result(input.response_format, perfValidar(input));
       }),
@@ -150,7 +153,7 @@ export function registerTools(server: McpServer): void {
       annotations: remoteWrite,
     },
     async (raw) =>
-      safe(async () => {
+      safe("perf_ejecutar", raw, async () => {
         const input = ExecuteInputSchema.parse(raw);
         return result(input.response_format, await perfEjecutar(input));
       }),
@@ -165,7 +168,7 @@ export function registerTools(server: McpServer): void {
       annotations: readOnly,
     },
     async (raw) =>
-      safe(() => {
+      safe("perf_resultados", raw, () => {
         const input = ResultsInputSchema.parse(raw);
         return result(input.response_format, perfResultados(input));
       }),
@@ -180,7 +183,7 @@ export function registerTools(server: McpServer): void {
       annotations: readOnly,
     },
     async (raw) =>
-      safe(() => {
+      safe("perf_comparar", raw, () => {
         const input = CompareInputSchema.parse(raw);
         return result(input.response_format, perfComparar(input));
       }),
@@ -195,7 +198,7 @@ export function registerTools(server: McpServer): void {
       annotations: localWrite,
     },
     async (raw) =>
-      safe(() => {
+      safe("perf_pipeline", raw, () => {
         const input = PipelineInputSchema.parse(raw);
         return result(input.response_format, perfPipeline(input));
       }),
@@ -210,7 +213,7 @@ export function registerTools(server: McpServer): void {
       annotations: readOnly,
     },
     async (raw) =>
-      safe(() => {
+      safe("perf_cambios", raw, () => {
         const input = ChangesInputSchema.parse(raw);
         return result(input.response_format, perfCambios(input));
       }),
@@ -225,7 +228,7 @@ export function registerTools(server: McpServer): void {
       annotations: localWrite,
     },
     async (raw) =>
-      safe(async () => {
+      safe("perf_informe", raw, async () => {
         const input = ReportInputSchema.parse(raw);
         const report = await perfInforme(input);
         return {
@@ -254,6 +257,41 @@ export function registerTools(server: McpServer): void {
       }),
   );
   server.registerTool(
+    "perf_telemetria",
+    {
+      title: "Consumo de tokens del servidor",
+      description:
+        "Contador de tokens estimados (heurística caracteres/4) consumidos por cada tool perf_* en esta sesión del proceso: llamadas, tokens de entrada y de salida. format: json/markdown devuelve el contador; pdf devuelve además un informe PDF embebido en base64.",
+      inputSchema: TelemetryInputSchema.shape,
+      annotations: readOnly,
+    },
+    async (raw) =>
+      safe("perf_telemetria", raw, async () => {
+        const input = TelemetryInputSchema.parse(raw);
+        const report = await perfTelemetria(input);
+        if (!report.pdf) return result(input.format === "pdf" ? "json" : input.format, report.ledger);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Informe de tokens generado. Llamadas registradas: ${Object.values(
+                report.ledger.perTool,
+              ).reduce((sum, t) => sum + t.calls, 0)}.`,
+            },
+            {
+              type: "resource" as const,
+              resource: {
+                uri: "file://test-results/performance/INFORME_TOKENS.pdf",
+                mimeType: "application/pdf",
+                blob: report.pdf.content,
+              },
+            },
+          ],
+          structuredContent: { ledger: report.ledger },
+        };
+      }),
+  );
+  server.registerTool(
     "perf_pr",
     {
       title: "Crear draft PR de performance",
@@ -263,23 +301,38 @@ export function registerTools(server: McpServer): void {
       annotations: remoteWrite,
     },
     async (raw) =>
-      safe(async () => {
+      safe("perf_pr", raw, async () => {
         const input = PullRequestInputSchema.parse(raw);
         return result(input.response_format, await perfPr(input));
       }),
   );
 }
 async function safe(
+  tool: string,
+  raw: unknown,
   action: () => CallToolResult | Promise<CallToolResult>,
 ): Promise<CallToolResult> {
+  let outcome: CallToolResult;
   try {
-    return await action();
+    outcome = await action();
   } catch (error: unknown) {
-    return {
+    outcome = {
       isError: true,
       content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
     };
   }
+  recordToolUsage(tool, JSON.stringify(raw ?? {}), contentText(outcome));
+  return outcome;
+}
+function contentText(result: CallToolResult): string {
+  return result.content
+    .map((item) => {
+      if (typeof (item as { text?: unknown }).text === "string")
+        return (item as { text: string }).text;
+      const resource = (item as { resource?: { text?: string; blob?: string } }).resource;
+      return resource?.text ?? resource?.blob ?? "";
+    })
+    .join("\n");
 }
 function result(format: ResponseFormat, value: unknown): CallToolResult {
   const normalized = JSON.parse(JSON.stringify(value)) as unknown;

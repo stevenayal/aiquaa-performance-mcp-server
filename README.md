@@ -125,6 +125,14 @@ Un pipeline puede evaluar resultados con:
 npx -y aiquaa-performance-mcp-server --evaluate test-results/performance/R_API.jtl tests/performance/thresholds/thresholds.json
 ```
 
+O generar el mismo informe PDF que produce `perf_informe`, sin pasar por MCP:
+
+```bash
+npx -y aiquaa-performance-mcp-server --report test-results/performance/R_API.jtl tests/performance/thresholds/thresholds.json test-results/performance/INFORME_PERF_API.pdf \
+  --api-name "Mi API" --test-type smoke --threads 1 --loops 1 \
+  --baseline test-results/performance/R_BASELINE.jtl --api-version v1.2.0 --repo-url https://github.com/org/repo --author "Nombre"
+```
+
 ## Seguridad de ejecución
 
 `perf_ejecutar` usa `validation_only` por defecto. Para una ejecución real se requieren simultáneamente:

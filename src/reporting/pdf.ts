@@ -1,10 +1,30 @@
-import PDFDocument from "pdfkit";
 import type { Comparison } from "../comparison/compare.js";
 import type { JtlSummary, ThresholdDefinition, Verdict } from "../types.js";
+import {
+  COLORS,
+  type ChartPoint,
+  type Doc,
+  MARGIN,
+  dataTable,
+  embedSvg,
+  ensureSpace,
+  footers,
+  formatDateTime,
+  hr,
+  metaTable,
+  newDocument,
+  pageContentWidth,
+  statBand,
+  subtitle,
+  timeSeriesChart,
+  title,
+} from "./pdf-kit.js";
+import { JMETER_LOGO_SVG } from "./jmeter-logo.js";
 
 export interface ReportOptions {
   summary: JtlSummary;
   comparison?: Comparison | undefined;
+  timeline?: ChartPoint[] | undefined;
   thresholds: ThresholdDefinition[];
   apiName: string;
   testType?: string | undefined;
@@ -15,19 +35,6 @@ export interface ReportOptions {
   author?: string | undefined;
 }
 
-const NAVY = "#0D1B40";
-const GRAY_DARK = "#1A1A1A";
-const GRAY_MID = "#4A4A4A";
-const GRAY_LIGHT = "#F5F5F5";
-const GRAY_BORDER = "#DDDDDD";
-const GREEN_PASS = "#16A34A";
-const RED_FAIL = "#DC2626";
-const AMBER_WARN = "#D97706";
-const GREEN_BG = "#F0FDF4";
-const RED_BG = "#FEF2F2";
-const AMBER_BG = "#FFFBEB";
-const WHITE = "#FFFFFF";
-
 const VERDICT_LABEL: Record<Verdict, string> = {
   PASS: "DENTRO DE SLA",
   FAIL: "FUERA DE SLA / DEGRADACIÓN",
@@ -35,55 +42,16 @@ const VERDICT_LABEL: Record<Verdict, string> = {
   NOT_EXECUTED: "NO EJECUTADO",
 };
 const VERDICT_COLOR: Record<Verdict, { fg: string; bg: string }> = {
-  PASS: { fg: GREEN_PASS, bg: GREEN_BG },
-  FAIL: { fg: RED_FAIL, bg: RED_BG },
-  INCONCLUSIVE: { fg: AMBER_WARN, bg: AMBER_BG },
-  NOT_EXECUTED: { fg: GRAY_MID, bg: GRAY_LIGHT },
+  PASS: { fg: COLORS.greenPass, bg: COLORS.greenBg },
+  FAIL: { fg: COLORS.redFail, bg: COLORS.redBg },
+  INCONCLUSIVE: { fg: COLORS.amberWarn, bg: COLORS.amberBg },
+  NOT_EXECUTED: { fg: COLORS.grayMid, bg: COLORS.grayLight },
 };
-
-type Doc = PDFKit.PDFDocument;
-
-function statCell(
-  doc: Doc,
-  x: number,
-  y: number,
-  w: number,
-  value: string,
-  label: string,
-  color: string,
-): void {
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(18)
-    .fillColor(color)
-    .text(value, x, y, { width: w, align: "center" });
-  doc
-    .font("Helvetica")
-    .fontSize(8)
-    .fillColor(GRAY_MID)
-    .text(label, x, y + 22, { width: w, align: "center" });
-}
-
-function statBand(
-  doc: Doc,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  cells: Array<{ value: string; label: string; color?: string }>,
-): number {
-  doc.rect(x, y, w, h).fillAndStroke(GRAY_LIGHT, GRAY_BORDER);
-  const colW = w / cells.length;
-  cells.forEach((cell, i) => {
-    statCell(doc, x + i * colW, y + h / 2 - 16, colW, cell.value, cell.label, cell.color ?? GRAY_DARK);
-  });
-  return y + h;
-}
 
 function verdictBanner(doc: Doc, x: number, y: number, w: number, verdict: Verdict): number {
   const { fg, bg } = VERDICT_COLOR[verdict];
   const h = 28;
-  doc.rect(x, y, w, h).fillAndStroke(bg, GRAY_BORDER);
+  doc.rect(x, y, w, h).fillAndStroke(bg, COLORS.grayBorder);
   doc
     .font("Helvetica-Bold")
     .fontSize(13)
@@ -103,35 +71,8 @@ function slaLine(thresholds: ThresholdDefinition[]): string {
   return parts.length ? `SLA evaluado: ${parts.join(" · ")}` : "SLA evaluado: sin thresholds declarados.";
 }
 
-function metaTable(
-  doc: Doc,
-  x: number,
-  y: number,
-  w: number,
-  rows: Array<[string, string]>,
-): number {
-  let cursor = y;
-  for (const [key, value] of rows) {
-    doc.font("Helvetica-Bold").fontSize(9).fillColor(GRAY_MID).text(key, x, cursor, { width: 130 });
-    doc
-      .font("Helvetica")
-      .fontSize(9)
-      .fillColor(GRAY_DARK)
-      .text(value, x + 135, cursor, { width: w - 135 });
-    cursor += 16;
-    doc
-      .moveTo(x, cursor - 4)
-      .lineTo(x + w, cursor - 4)
-      .strokeColor(GRAY_BORDER)
-      .lineWidth(0.5)
-      .stroke();
-  }
-  return cursor;
-}
-
 function comparisonTable(doc: Doc, x: number, y: number, w: number, comparison: Comparison): number {
-  const rows: Array<[string, string, string, string]> = [
-    ["Métrica", "Línea base", "Esta corrida", "Cambio"],
+  const rows: string[][] = [
     [
       "P95 (ms)",
       String(comparison.baseline.p95Ms),
@@ -147,63 +88,40 @@ function comparisonTable(doc: Doc, x: number, y: number, w: number, comparison: 
         : `${comparison.errorRateChangePoints.toFixed(2)} pts`,
     ],
   ];
-  const colW = [w * 0.3, w * 0.23, w * 0.23, w * 0.24];
-  let cursor = y;
-  rows.forEach((row, i) => {
-    const rowH = 18;
-    if (i === 0) doc.rect(x, cursor, w, rowH).fill(GRAY_LIGHT);
-    let cx = x;
-    row.forEach((cell, ci) => {
-      doc
-        .font(i === 0 ? "Helvetica-Bold" : "Helvetica")
-        .fontSize(8)
-        .fillColor(GRAY_DARK)
-        .text(cell, cx + 4, cursor + 5, { width: (colW[ci] ?? 0) - 8 });
-      cx += colW[ci] ?? 0;
-    });
-    doc
-      .rect(x, cursor, w, rowH)
-      .strokeColor(GRAY_BORDER)
-      .lineWidth(0.5)
-      .stroke();
-    cursor += rowH;
-  });
-  return cursor;
-}
-
-const MARGIN = 40;
-const HEADERS = ["Sampler", "Total", "Errores", "Error %", "Avg ms", "P90 ms", "P95 ms"] as const;
-const COL_WEIGHTS = [0.3, 0.11, 0.12, 0.12, 0.12, 0.11, 0.12];
-
-function ensureSpace(doc: Doc, y: number, needed: number): number {
-  if (y + needed <= doc.page.height - MARGIN - 20) return y;
-  doc.addPage();
-  return MARGIN;
+  return dataTable(
+    doc,
+    x,
+    y,
+    w,
+    [
+      { header: "Métrica", weight: 0.3 },
+      { header: "Línea base", weight: 0.23, align: "center" },
+      { header: "Esta corrida", weight: 0.23, align: "center" },
+      { header: "Cambio", weight: 0.24, align: "center" },
+    ],
+    rows,
+  );
 }
 
 function samplerTable(doc: Doc, x: number, startY: number, w: number, summary: JtlSummary): number {
-  const colW = COL_WEIGHTS.map((weight) => weight * w);
   let y = ensureSpace(doc, startY, 40);
-  doc.font("Helvetica-Bold").fontSize(13).fillColor(GRAY_DARK).text("Detalle por sampler", x, y);
+  doc.font("Helvetica-Bold").fontSize(13).fillColor(COLORS.grayDark).text("Detalle por sampler", x, y);
   y += 20;
-  const rowH = 16;
-  y = ensureSpace(doc, y, rowH);
-  doc.rect(x, y, w, rowH).fill(NAVY);
-  let cx = x;
-  HEADERS.forEach((header, i) => {
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(7.5)
-      .fillColor(WHITE)
-      .text(header, cx + 4, y + 4, { width: (colW[i] ?? 0) - 8 });
-    cx += colW[i] ?? 0;
-  });
-  y += rowH;
-  for (const [index, op] of summary.operations.entries()) {
-    y = ensureSpace(doc, y, rowH);
-    if (index % 2 === 1) doc.rect(x, y, w, rowH).fill(GRAY_LIGHT);
-    const errColor = op.errorRate > 2 ? RED_FAIL : GRAY_DARK;
-    const cells = [
+  return dataTable(
+    doc,
+    x,
+    y,
+    w,
+    [
+      { header: "Sampler", weight: 0.3 },
+      { header: "Total", weight: 0.11, align: "center" },
+      { header: "Errores", weight: 0.12, align: "center" },
+      { header: "Error %", weight: 0.12, align: "center" },
+      { header: "Avg ms", weight: 0.12, align: "center" },
+      { header: "P90 ms", weight: 0.11, align: "center" },
+      { header: "P95 ms", weight: 0.12, align: "center" },
+    ],
+    summary.operations.map((op) => [
       op.label,
       String(op.samples),
       String(op.failures),
@@ -211,20 +129,15 @@ function samplerTable(doc: Doc, x: number, startY: number, w: number, summary: J
       op.averageMs.toFixed(1),
       op.p90Ms.toFixed(1),
       op.p95Ms.toFixed(1),
-    ];
-    cx = x;
-    cells.forEach((cell, i) => {
-      doc
-        .font(i === 3 ? "Helvetica-Bold" : "Helvetica")
-        .fontSize(7.5)
-        .fillColor(i === 2 || i === 3 ? errColor : GRAY_DARK)
-        .text(cell, cx + 4, y + 4, { width: (colW[i] ?? 0) - 8 });
-      cx += colW[i] ?? 0;
-    });
-    doc.rect(x, y, w, rowH).strokeColor(GRAY_BORDER).lineWidth(0.3).stroke();
-    y += rowH;
-  }
-  return y;
+    ]),
+    {
+      cellColor: (row, _rowIndex, colIndex) => {
+        if (colIndex !== 2 && colIndex !== 3) return undefined;
+        return parseFloat(row[3] ?? "0") > 2 ? COLORS.redFail : undefined;
+      },
+      cellBold: (_row, _rowIndex, colIndex) => colIndex === 3,
+    },
+  );
 }
 
 function errorsTable(doc: Doc, x: number, startY: number, w: number, errors: Record<string, number>): number {
@@ -234,85 +147,44 @@ function errorsTable(doc: Doc, x: number, startY: number, w: number, errors: Rec
   if (!top.length) return startY;
   let y = ensureSpace(doc, startY, 40);
   y += 12;
-  doc.font("Helvetica-Bold").fontSize(13).fillColor(GRAY_DARK).text("Top errores", x, y);
+  doc.font("Helvetica-Bold").fontSize(13).fillColor(COLORS.grayDark).text("Top errores", x, y);
   y += 20;
-  const colW = [w * 0.7, w * 0.3];
-  const rowH = 16;
-  y = ensureSpace(doc, y, rowH);
-  doc.rect(x, y, w, rowH).fill(RED_BG);
-  doc.font("Helvetica-Bold").fontSize(7.5).fillColor(GRAY_DARK).text("Código / mensaje", x + 4, y + 4, {
-    width: (colW[0] ?? 0) - 8,
-  });
-  doc.text("Ocurrencias", x + (colW[0] ?? 0) + 4, y + 4, { width: (colW[1] ?? 0) - 8 });
-  y += rowH;
-  for (const [message, count] of top) {
-    y = ensureSpace(doc, y, rowH);
-    doc.rect(x, y, w, rowH).strokeColor(GRAY_BORDER).lineWidth(0.3).stroke();
-    doc
-      .font("Helvetica")
-      .fontSize(7.5)
-      .fillColor(RED_FAIL)
-      .text(message, x + 4, y + 4, { width: (colW[0] ?? 0) - 8 });
-    doc
-      .font("Helvetica")
-      .fillColor(GRAY_DARK)
-      .text(String(count), x + (colW[0] ?? 0) + 4, y + 4, { width: (colW[1] ?? 0) - 8 });
-    y += rowH;
-  }
-  return y;
-}
-
-function footers(doc: Doc, author: string | undefined): void {
-  const range = doc.bufferedPageRange();
-  for (let i = range.start; i < range.start + range.count; i += 1) {
-    doc.switchToPage(i);
-    const w = doc.page.width;
-    const h = doc.page.height;
-    // Footer sits inside the bottom margin band; pdfkit auto-paginates text
-    // that would land past page.maxY(), so the bottom margin is dropped to 0
-    // for the duration of this draw and restored right after.
-    const bottomMargin = doc.page.margins.bottom;
-    doc.page.margins.bottom = 0;
-    const left = author
-      ? `Prueba de rendimiento: ${author}  |  aiquaa-performance-mcp-server`
-      : "aiquaa-performance-mcp-server";
-    doc
-      .font("Helvetica")
-      .fontSize(7)
-      .fillColor(NAVY)
-      .text(left, MARGIN, h - 28, { lineBreak: false });
-    doc
-      .fillColor(GRAY_MID)
-      .text(`Pág. ${i - range.start + 1}/${range.count}`, w - MARGIN - 100, h - 28, {
-        width: 100,
-        align: "right",
-        lineBreak: false,
-      });
-    doc.page.margins.bottom = bottomMargin;
-  }
+  return dataTable(
+    doc,
+    x,
+    y,
+    w,
+    [
+      { header: "Código / mensaje", weight: 0.7 },
+      { header: "Ocurrencias", weight: 0.3, align: "center" },
+    ],
+    top.map(([message, count]) => [message, String(count)]),
+    { cellColor: (_row, _rowIndex, colIndex) => (colIndex === 0 ? COLORS.redFail : undefined) },
+  );
 }
 
 export async function buildPdfReport(options: ReportOptions): Promise<Buffer> {
-  const { summary, comparison, thresholds, apiName, testType, threads, loops, apiVersion, repoUrl, author } =
-    options;
-  const doc = new PDFDocument({ size: "A4", margin: MARGIN, bufferPages: true });
-  const chunks: Buffer[] = [];
-  doc.on("data", (chunk: Buffer) => chunks.push(chunk));
-  const done = new Promise<Buffer>((resolve, reject) => {
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-    doc.on("error", reject);
-  });
-
-  const w = doc.page.width - 2 * MARGIN;
+  const {
+    summary,
+    comparison,
+    timeline,
+    thresholds,
+    apiName,
+    testType,
+    threads,
+    loops,
+    apiVersion,
+    repoUrl,
+    author,
+  } = options;
+  const { doc, done } = newDocument();
+  const w = pageContentWidth(doc);
   let y = MARGIN;
 
-  doc.font("Helvetica-Bold").fontSize(20).fillColor(GRAY_DARK).text("Informe de Prueba de Rendimiento", MARGIN, y);
-  y += 26;
-  const subtitle = testType ? `${apiName} — perfil ${testType}` : apiName;
-  doc.font("Helvetica").fontSize(11).fillColor(GRAY_MID).text(subtitle, MARGIN, y);
-  y += 20;
-  doc.moveTo(MARGIN, y).lineTo(MARGIN + w, y).strokeColor(GRAY_BORDER).lineWidth(0.5).stroke();
-  y += 12;
+  embedSvg(doc, JMETER_LOGO_SVG, MARGIN + w - 92, MARGIN - 4, { width: 92, height: 31 });
+  y = title(doc, "Informe de Prueba de Rendimiento", y);
+  y = subtitle(doc, testType ? `${apiName} — perfil ${testType}` : apiName, y);
+  y = hr(doc, y, w);
 
   y = statBand(doc, MARGIN, y, w, 50, [
     { value: summary.samples.toLocaleString("es-AR"), label: "Peticiones totales" },
@@ -321,7 +193,7 @@ export async function buildPdfReport(options: ReportOptions): Promise<Buffer> {
     {
       value: `${summary.errorRate.toFixed(2)}%`,
       label: "Error rate",
-      color: summary.errorRate > 2 ? RED_FAIL : GREEN_PASS,
+      color: summary.errorRate > 2 ? COLORS.redFail : COLORS.greenPass,
     },
   ]);
   y += 12;
@@ -336,7 +208,7 @@ export async function buildPdfReport(options: ReportOptions): Promise<Buffer> {
 
   y = verdictBanner(doc, MARGIN, y, w, summary.verdict);
   y += 6;
-  doc.font("Helvetica").fontSize(8).fillColor(GRAY_MID).text(slaLine(thresholds), MARGIN, y, {
+  doc.font("Helvetica").fontSize(8).fillColor(COLORS.grayMid).text(slaLine(thresholds), MARGIN, y, {
     width: w,
     align: "center",
   });
@@ -345,19 +217,19 @@ export async function buildPdfReport(options: ReportOptions): Promise<Buffer> {
     doc
       .font("Helvetica")
       .fontSize(8)
-      .fillColor(AMBER_WARN)
+      .fillColor(COLORS.amberWarn)
       .text(`Motivo INCONCLUSIVE: ${summary.inconclusiveReasons.join("; ")}`, MARGIN, y, { width: w });
   y += 12;
 
   if (comparison && comparison.verdict !== "not_comparable") {
-    doc.font("Helvetica-Bold").fontSize(12).fillColor(GRAY_DARK).text("Comparación con línea base", MARGIN, y);
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(COLORS.grayDark).text("Comparación con línea base", MARGIN, y);
     y += 16;
     y = comparisonTable(doc, MARGIN, y, w, comparison);
     y += 12;
   }
 
   const meta: Array<[string, string]> = [
-    ["Fecha / hora", new Date().toISOString()],
+    ["Fecha / hora", formatDateTime(new Date())],
     ["Perfil", testType ?? "no especificado"],
     ["Threads (usuarios)", threads === undefined ? "no especificado" : String(threads)],
     ["Loops por thread", loops === undefined ? "hasta agotar duración" : String(loops)],
@@ -366,12 +238,29 @@ export async function buildPdfReport(options: ReportOptions): Promise<Buffer> {
   if (apiVersion) meta.push(["Versión / release", apiVersion]);
   if (repoUrl) meta.push(["Repositorio", repoUrl]);
   y = metaTable(doc, MARGIN, y, w, meta);
-  y += 10;
+  y += 14;
+
+  if (timeline && timeline.length) {
+    y = ensureSpace(doc, y, 130);
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .fillColor(COLORS.grayDark)
+      .text("Transacciones y tiempo de respuesta durante la ejecución", MARGIN, y);
+    y += 16;
+    y = timeSeriesChart(doc, MARGIN, y, w, 110, timeline);
+    y += 14;
+  }
 
   y = samplerTable(doc, MARGIN, y, w, summary);
   errorsTable(doc, MARGIN, y, w, summary.errors);
 
-  footers(doc, author);
+  footers(
+    doc,
+    author
+      ? `Prueba de rendimiento: ${author}  |  aiquaa-performance-mcp-server`
+      : "aiquaa-performance-mcp-server",
+  );
   doc.end();
   return done;
 }

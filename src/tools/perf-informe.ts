@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import { ReportInputSchema } from "../schemas/tools.js";
-import { analyzeJtl } from "../results/jtl.js";
+import { analyzeJtl, buildTimeline } from "../results/jtl.js";
 import { compareJtl } from "../comparison/compare.js";
 import { buildPdfReport } from "../reporting/pdf.js";
 import type { JtlSummary } from "../types.js";
@@ -21,9 +21,11 @@ export async function perfInforme(
   const comparison = input.baseline_jtl
     ? compareJtl(input.baseline_jtl, input.jtl, input.thresholds, {}, {}, 10)
     : undefined;
+  const timeline = buildTimeline(input.jtl);
   const pdf = await buildPdfReport({
     summary,
     comparison,
+    timeline,
     thresholds: input.thresholds,
     apiName: input.api_name,
     testType: input.test_type,

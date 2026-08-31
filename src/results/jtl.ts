@@ -9,6 +9,49 @@ interface Sample {
   message: string;
   bytes: number;
 }
+export interface TimelineBucket {
+  tSeconds: number;
+  count: number;
+  errorCount: number;
+  avgMs: number;
+}
+
+/** Buckets raw samples by elapsed time for a transactions/response-time-over-time chart. */
+export function buildTimeline(content: string, maxBuckets = 12): TimelineBucket[] {
+  const rows = parseCsv(content.trim());
+  if (rows.length < 2) return [];
+  const headers = rows[0] ?? [];
+  const samples = rows
+    .slice(1)
+    .map((row) => parseSample(headers, row))
+    .filter((v): v is Sample => v !== undefined)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (!samples.length) return [];
+  const t0 = samples[0]?.timestamp ?? 0;
+  const t1 = samples.at(-1)?.timestamp ?? t0;
+  const durationSeconds = Math.max(1, (t1 - t0) / 1000);
+  const bucketSeconds = Math.max(1, Math.ceil(durationSeconds / maxBuckets));
+  const buckets = new Map<number, { count: number; totalMs: number; errors: number }>();
+  for (const sample of samples) {
+    const index = Math.floor((sample.timestamp - t0) / 1000 / bucketSeconds);
+    const entry = buckets.get(index) ?? { count: 0, totalMs: 0, errors: 0 };
+    entry.count += 1;
+    entry.totalMs += sample.elapsed;
+    if (!sample.success) entry.errors += 1;
+    buckets.set(index, entry);
+  }
+  const lastIndex = Math.max(...buckets.keys());
+  return Array.from({ length: lastIndex + 1 }, (_, index) => {
+    const entry = buckets.get(index);
+    return {
+      tSeconds: index * bucketSeconds,
+      count: entry?.count ?? 0,
+      errorCount: entry?.errors ?? 0,
+      avgMs: entry && entry.count ? Math.round(entry.totalMs / entry.count) : 0,
+    };
+  });
+}
+
 export function analyzeJtl(
   content: string,
   thresholds: ThresholdDefinition[] = [],
