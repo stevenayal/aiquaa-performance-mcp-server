@@ -24,8 +24,23 @@ jobs:
         run: |
           mkdir -p test-results/performance/dashboard
           apache-jmeter-5.6.3/bin/jmeter -n -t tests/performance/plans/P_NASAAPOD.jmx -l test-results/performance/R_NASAAPOD.jtl -e -o test-results/performance/dashboard
+      # This workflow tests aiquaa-performance-mcp-server's own code, so it
+      # builds the checked-out PR rather than `npx -y aiquaa-performance-mcp-server`
+      # (which would run whatever was last published to npm, missing --report
+      # or any other change under review here).
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
       - name: Evaluate thresholds
-        run: npx -y aiquaa-performance-mcp-server --evaluate test-results/performance/R_NASAAPOD.jtl tests/performance/thresholds/thresholds.json
+        run: node dist/server.js --evaluate test-results/performance/R_NASAAPOD.jtl tests/performance/thresholds/thresholds.json
+      - name: Generate PDF report
+        run: |
+          node dist/server.js --report test-results/performance/R_NASAAPOD.jtl tests/performance/thresholds/thresholds.json test-results/performance/INFORME_PERF_NASAAPOD.pdf \
+            --api-name "NASA APOD (api.nasa.gov)" --test-type smoke --threads 1 --loops 1 \
+            --repo-url https://api.nasa.gov/planetary/apod
       - uses: actions/upload-artifact@v4
         if: always()
         with:

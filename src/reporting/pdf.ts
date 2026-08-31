@@ -9,6 +9,7 @@ import {
   embedSvg,
   ensureSpace,
   footers,
+  formatDateTime,
   hr,
   metaTable,
   newDocument,
@@ -228,7 +229,7 @@ export async function buildPdfReport(options: ReportOptions): Promise<Buffer> {
   }
 
   const meta: Array<[string, string]> = [
-    ["Fecha / hora", new Date().toISOString()],
+    ["Fecha / hora", formatDateTime(new Date())],
     ["Perfil", testType ?? "no especificado"],
     ["Threads (usuarios)", threads === undefined ? "no especificado" : String(threads)],
     ["Loops por thread", loops === undefined ? "hasta agotar duración" : String(loops)],

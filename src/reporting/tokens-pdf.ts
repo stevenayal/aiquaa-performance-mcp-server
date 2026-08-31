@@ -4,6 +4,7 @@ import {
   MARGIN,
   dataTable,
   footers,
+  formatDateTime,
   hr,
   newDocument,
   pageContentWidth,
@@ -18,7 +19,11 @@ export async function buildTokenReportPdf(ledger: TokenLedger): Promise<Buffer> 
   let y = MARGIN;
 
   y = title(doc, "Informe de Consumo de Tokens (MCP)", y);
-  y = subtitle(doc, `aiquaa-performance-mcp-server · sesión iniciada ${ledger.startedAt}`, y);
+  y = subtitle(
+    doc,
+    `aiquaa-performance-mcp-server · sesión iniciada ${formatDateTime(new Date(ledger.startedAt))}`,
+    y,
+  );
   y = hr(doc, y, w);
 
   const tools = Object.values(ledger.perTool).sort(

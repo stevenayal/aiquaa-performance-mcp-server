@@ -31,6 +31,25 @@ export function newDocument(): { doc: Doc; done: Promise<Buffer> } {
   return { doc, done };
 }
 
+/**
+ * Human-readable timestamp for report covers, e.g. "31 de ago de 2026, 02:59:37 UTC".
+ * Fixed to UTC so the same run reads identically whether the report was built
+ * on a laptop or a CI runner in another time zone.
+ */
+export function formatDateTime(date: Date): string {
+  const formatted = new Intl.DateTimeFormat("es-AR", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZone: "UTC",
+  }).format(date);
+  return `${formatted} UTC`;
+}
+
 export function pageContentWidth(doc: Doc): number {
   return doc.page.width - 2 * MARGIN;
 }
@@ -206,9 +225,26 @@ export interface ChartPoint {
   avgMs: number;
 }
 
+/** Evenly spaced, human-friendly axis ticks (0, step, 2·step, …) covering `max`. */
+function niceTicks(max: number, targetCount = 4): number[] {
+  if (max <= 0) return Array.from({ length: targetCount + 1 }, (_, i) => i);
+  const rawStep = max / targetCount;
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+  const residual = rawStep / magnitude;
+  const niceResidual = residual >= 5 ? 10 : residual >= 2 ? 5 : residual >= 1 ? 2 : 1;
+  const step = niceResidual * magnitude;
+  const niceMax = Math.ceil(max / step) * step;
+  const ticks: number[] = [];
+  for (let v = 0; v <= niceMax + step / 2; v += step) ticks.push(Math.round(v));
+  return ticks;
+}
+
+const fmtNum = (value: number): string => value.toLocaleString("es-AR");
+
 /**
  * Transactions/interval (bars, left axis) + average response time (line, right
- * axis) over the run's duration. Returns the y position right after the chart.
+ * axis) over the run's duration, drawn as a bordered card. Returns the y
+ * position right after the chart.
  */
 export function timeSeriesChart(
   doc: Doc,
@@ -218,6 +254,7 @@ export function timeSeriesChart(
   h: number,
   points: ChartPoint[],
 ): number {
+  doc.roundedRect(x, startY, w, h, 4).fillAndStroke(COLORS.white, COLORS.grayBorder);
   if (!points.length) {
     doc
       .font("Helvetica")
@@ -230,56 +267,95 @@ export function timeSeriesChart(
     return startY + h;
   }
 
-  const axisLeft = x + 28;
-  const axisRight = x + w - 28;
-  const axisTop = startY + 4;
-  const axisBottom = startY + h - 22;
+  const axisLeft = x + 34;
+  const axisRight = x + w - 34;
+  const axisTop = startY + 14;
+  const axisBottom = startY + h - 26;
   const plotW = axisRight - axisLeft;
   const plotH = axisBottom - axisTop;
-  const maxCount = Math.max(1, ...points.map((p) => p.count));
-  const maxMs = Math.max(1, ...points.map((p) => p.avgMs));
+  const countTicks = niceTicks(Math.max(...points.map((p) => p.count)));
+  const msTicks = niceTicks(Math.max(...points.map((p) => p.avgMs)));
+  const maxCount = countTicks.at(-1) ?? 1;
+  const maxMs = msTicks.at(-1) ?? 1;
   const slot = plotW / points.length;
-  const barW = Math.min(18, slot * 0.5);
+  const barW = Math.min(20, slot * 0.55);
 
-  doc.rect(axisLeft, axisTop, plotW, plotH).strokeColor(COLORS.grayBorder).lineWidth(0.5).stroke();
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(7)
+    .fillColor(COLORS.chartBar)
+    .text("TRANSACCIONES", x + 8, startY + 5, { width: plotW / 2, align: "left" });
+  doc
+    .fillColor(COLORS.amberWarn)
+    .text("TIEMPO DE RESPUESTA (MS)", x, startY + 5, { width: w - 8, align: "right" });
 
-  const ticks = 4;
-  for (let i = 0; i <= ticks; i += 1) {
-    const yy = axisBottom - (plotH * i) / ticks;
-    if (i > 0)
-      doc.moveTo(axisLeft, yy).lineTo(axisRight, yy).strokeColor(COLORS.grayLight).lineWidth(0.5).stroke();
+  const tickCount = Math.max(countTicks.length, msTicks.length) - 1;
+  for (let i = 0; i <= tickCount; i += 1) {
+    const yy = axisBottom - (plotH * i) / tickCount;
     doc
-      .font("Helvetica")
-      .fontSize(6)
-      .fillColor(COLORS.grayMid)
-      .text(String(Math.round((maxCount * i) / ticks)), x, yy - 3, {
-        width: axisLeft - x - 3,
-        align: "right",
-      });
-    doc.text(String(Math.round((maxMs * i) / ticks)), axisRight + 3, yy - 3, {
-      width: x + w - axisRight - 3,
-      align: "left",
-    });
+      .moveTo(axisLeft, yy)
+      .lineTo(axisRight, yy)
+      .strokeColor(i === 0 ? COLORS.grayBorder : COLORS.grayLight)
+      .lineWidth(0.5)
+      .stroke();
+    const countValue = countTicks[i];
+    if (countValue !== undefined)
+      doc
+        .font("Helvetica")
+        .fontSize(7)
+        .fillColor(COLORS.grayMid)
+        .text(fmtNum(countValue), x, yy - 3, { width: axisLeft - x - 4, align: "right" });
+    const msValue = msTicks[i];
+    if (msValue !== undefined)
+      doc.text(fmtNum(msValue), axisRight + 4, yy - 3, { width: x + w - axisRight - 6, align: "left" });
   }
 
+  const barRadius = Math.min(3, barW / 2);
   points.forEach((p, i) => {
-    const barH = (p.count / maxCount) * plotH;
+    const barH = Math.max(1, (p.count / maxCount) * plotH);
     const cx = axisLeft + slot * i + slot / 2;
-    doc.rect(cx - barW / 2, axisBottom - barH, barW, Math.max(0.5, barH)).fill(COLORS.chartBar);
+    doc
+      .roundedRect(cx - barW / 2, axisBottom - barH, barW, barH, barRadius)
+      .fillOpacity(0.85)
+      .fill(COLORS.chartBar)
+      .fillOpacity(1);
   });
 
-  doc.strokeColor(COLORS.amberWarn).lineWidth(1.5);
-  points.forEach((p, i) => {
-    const px = axisLeft + slot * i + slot / 2;
-    const py = axisBottom - (p.avgMs / maxMs) * plotH;
-    if (i === 0) doc.moveTo(px, py);
-    else doc.lineTo(px, py);
+  const linePoints = points.map((p, i) => ({
+    x: axisLeft + slot * i + slot / 2,
+    y: axisBottom - (p.avgMs / maxMs) * plotH,
+  }));
+
+  if (linePoints.length > 1) {
+    const first = linePoints[0];
+    const last = linePoints.at(-1);
+    if (first && last) {
+      doc.moveTo(first.x, axisBottom).lineTo(first.x, first.y);
+      for (let i = 1; i < linePoints.length; i += 1) {
+        const prev = linePoints[i - 1];
+        const curr = linePoints[i];
+        if (!prev || !curr) continue;
+        const midX = (prev.x + curr.x) / 2;
+        doc.bezierCurveTo(midX, prev.y, midX, curr.y, curr.x, curr.y);
+      }
+      doc.lineTo(last.x, axisBottom).closePath().fillOpacity(0.12).fill(COLORS.amberWarn).fillOpacity(1);
+    }
+  }
+
+  doc.strokeColor(COLORS.amberWarn).lineWidth(1.8);
+  linePoints.forEach((p, i) => {
+    if (i === 0) doc.moveTo(p.x, p.y);
+    else {
+      const prev = linePoints[i - 1];
+      if (!prev) return;
+      const midX = (prev.x + p.x) / 2;
+      doc.bezierCurveTo(midX, prev.y, midX, p.y, p.x, p.y);
+    }
   });
   doc.stroke();
-  points.forEach((p, i) => {
-    const px = axisLeft + slot * i + slot / 2;
-    const py = axisBottom - (p.avgMs / maxMs) * plotH;
-    doc.circle(px, py, 1.8).fill(COLORS.amberWarn);
+  linePoints.forEach((p) => {
+    doc.circle(p.x, p.y, 2.6).fill(COLORS.amberWarn);
+    doc.circle(p.x, p.y, 1.1).fill(COLORS.white);
   });
 
   const labelIndexes = new Set([0, Math.floor((points.length - 1) / 2), points.length - 1]);
@@ -288,21 +364,27 @@ export function timeSeriesChart(
     if (!p) continue;
     const px = axisLeft + slot * i + slot / 2;
     doc
+      .moveTo(px, axisBottom)
+      .lineTo(px, axisBottom + 3)
+      .strokeColor(COLORS.grayBorder)
+      .lineWidth(0.5)
+      .stroke();
+    doc
       .font("Helvetica")
-      .fontSize(6)
+      .fontSize(7)
       .fillColor(COLORS.grayMid)
-      .text(`${p.tSeconds}s`, px - 14, axisBottom + 4, { width: 28, align: "center" });
+      .text(`${p.tSeconds}s`, px - 16, axisBottom + 5, { width: 32, align: "center" });
   }
 
-  const legendY = startY + h - 10;
-  doc.rect(x, legendY, 7, 7).fill(COLORS.chartBar);
+  const legendY = startY + h - 13;
+  doc.roundedRect(x + 8, legendY, 8, 8, 2).fill(COLORS.chartBar);
   doc
     .font("Helvetica")
     .fontSize(7)
     .fillColor(COLORS.grayMid)
-    .text("Transacciones / intervalo", x + 11, legendY - 1);
-  doc.rect(x + 155, legendY, 7, 7).fill(COLORS.amberWarn);
-  doc.text("Tiempo de respuesta promedio (ms)", x + 166, legendY - 1);
+    .text("Transacciones por intervalo", x + 20, legendY);
+  doc.roundedRect(x + 165, legendY, 8, 8, 2).fill(COLORS.amberWarn);
+  doc.text("Tiempo de respuesta promedio (ms)", x + 177, legendY);
 
   return startY + h;
 }
