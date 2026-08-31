@@ -5,12 +5,15 @@ import { generatePerformanceFiles } from "./jmeter/generator/index.js";
 import { parseJmx } from "./jmeter/parser/index.js";
 import { validateJmx } from "./jmeter/validator/index.js";
 import { deriveLoadModel, presetModel } from "./load-model/presets.js";
-import { analyzeJtl } from "./results/jtl.js";
+import { analyzeJtl, buildTimeline } from "./results/jtl.js";
 import { evaluateExecution, redactSecrets, safeRelativePath } from "./security/policy.js";
 import { planPullRequest } from "./github/pull-request.js";
 import { RequirementSchema } from "./schemas/common.js";
 import { evaluateThreshold } from "./thresholds/evaluate.js";
+import { generatePipeline } from "./pipelines/generator.js";
 import { buildPdfReport } from "./reporting/pdf.js";
+import { buildTokenReportPdf } from "./reporting/tokens-pdf.js";
+import { estimateTokens, recordToolUsage, resetTokenLedger, getTokenLedger } from "./telemetry/tokens.js";
 
 const jtl = (elapsed: number[]): string =>
   `timeStamp,elapsed,label,responseCode,responseMessage,success,bytes\n${elapsed.map((v, i) => `${1700000000000 + i * 1000},${v},GET users,200,OK,true,100`).join("\n")}\n`;
@@ -137,6 +140,15 @@ describe("results and comparisons", () => {
     expect(evaluateThreshold(metric, { scope: "global", p95Ms: 50 })).toBe("FAIL");
     expect(evaluateThreshold(metric)).toBe("INCONCLUSIVE");
   });
+  it("buckets samples into a chronological timeline", () => {
+    const timeline = buildTimeline(jtl([100, 200, 300, 400]), 2);
+    expect(timeline.length).toBeGreaterThan(0);
+    expect(timeline.reduce((sum, b) => sum + b.count, 0)).toBe(4);
+    expect(timeline[0]?.tSeconds).toBe(0);
+  });
+  it("returns an empty timeline without samples", () => {
+    expect(buildTimeline("")).toEqual([]);
+  });
 });
 describe("PDF reporting", () => {
   it("renders a valid PDF with cover, verdict and sampler detail", async () => {
@@ -164,6 +176,41 @@ describe("PDF reporting", () => {
       thresholds: [{ scope: "global", p95Ms: 500 }],
       apiName: "Demo API",
     });
+    expect(pdf.subarray(0, 4).toString("latin1")).toBe("%PDF");
+  });
+});
+describe("pipeline generation", () => {
+  it("splits PERF_BASE_URL into the -Jhost/-Jport/-Jprotocol the JMX actually reads", () => {
+    const file = generatePipeline("github_actions", "Demo", "P.jmx", undefined, "thresholds.json");
+    expect(file.content).toContain('-Jprotocol="$proto" -Jhost="$host" -Jport="$port"');
+    expect(file.content).not.toContain("-JbaseUrl");
+    // every continuation line of the shell snippet must be indented to match
+    // `run: |`, or GitHub Actions terminates the YAML block scalar early.
+    const runBlocks = file.content.split("run: |\n");
+    const headlessBlock = runBlocks.at(-1) ?? "";
+    const runLines = headlessBlock.split("\n").slice(0, 6);
+    expect(runLines.every((line) => line.startsWith("          "))).toBe(true);
+  });
+});
+describe("token telemetry", () => {
+  it("estimates tokens as a chars/4 proxy", () => {
+    expect(estimateTokens("")).toBe(0);
+    expect(estimateTokens("abcd")).toBe(1);
+    expect(estimateTokens("a".repeat(41))).toBe(11);
+  });
+  it("accumulates per-tool calls, input and output tokens across calls", () => {
+    resetTokenLedger();
+    recordToolUsage("perf_analizar", "{}", "ok");
+    recordToolUsage("perf_analizar", "{}", "ok-again");
+    const stat = getTokenLedger().perTool["perf_analizar"];
+    expect(stat?.calls).toBe(2);
+    expect(stat?.outputTokensEstimate).toBe(estimateTokens("ok") + estimateTokens("ok-again"));
+  });
+  it("renders a valid token-consumption PDF", async () => {
+    resetTokenLedger();
+    recordToolUsage("perf_analizar", "{}", "x".repeat(400));
+    recordToolUsage("perf_informe", "{}", "y".repeat(4000));
+    const pdf = await buildTokenReportPdf(getTokenLedger());
     expect(pdf.subarray(0, 4).toString("latin1")).toBe("%PDF");
   });
 });

@@ -141,6 +141,9 @@ export const ReportInputSchema = z
     output_path: z.string().default("test-results/performance/INFORME_PERF.pdf"),
   })
   .strict();
+export const TelemetryInputSchema = z
+  .object({ format: z.enum(["json", "markdown", "pdf"]).default("json") })
+  .strict();
 export const ChangesInputSchema = z
   .object({
     analysis: z.record(z.unknown()),
