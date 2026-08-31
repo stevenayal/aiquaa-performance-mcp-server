@@ -6,6 +6,7 @@ import {
   type Doc,
   MARGIN,
   dataTable,
+  embedImage,
   embedSvg,
   ensureSpace,
   footers,
@@ -21,6 +22,12 @@ import {
 } from "./pdf-kit.js";
 import { JMETER_LOGO_SVG } from "./jmeter-logo.js";
 
+export interface MonitoringEvidenceOption {
+  label: string;
+  sourceUrl: string;
+  capturedAt: string;
+  image: Buffer;
+}
 export interface ReportOptions {
   summary: JtlSummary;
   comparison?: Comparison | undefined;
@@ -33,6 +40,7 @@ export interface ReportOptions {
   apiVersion?: string | undefined;
   repoUrl?: string | undefined;
   author?: string | undefined;
+  monitoringEvidence?: MonitoringEvidenceOption[] | undefined;
 }
 
 const VERDICT_LABEL: Record<Verdict, string> = {
@@ -163,6 +171,31 @@ function errorsTable(doc: Doc, x: number, startY: number, w: number, errors: Rec
   );
 }
 
+function monitoringEvidenceSection(
+  doc: Doc,
+  x: number,
+  startY: number,
+  w: number,
+  evidence: MonitoringEvidenceOption[],
+): number {
+  if (!evidence.length) return startY;
+  let y = ensureSpace(doc, startY, 40);
+  y += 12;
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(13)
+    .fillColor(COLORS.grayDark)
+    .text("Evidencia de monitoreo post-ejecución", x, y);
+  y += 20;
+  for (const item of evidence)
+    y = embedImage(doc, x, y, w, item.image, {
+      caption: item.label,
+      sourceUrl: item.sourceUrl,
+      capturedAt: formatDateTime(new Date(item.capturedAt)),
+    });
+  return y;
+}
+
 export async function buildPdfReport(options: ReportOptions): Promise<Buffer> {
   const {
     summary,
@@ -176,6 +209,7 @@ export async function buildPdfReport(options: ReportOptions): Promise<Buffer> {
     apiVersion,
     repoUrl,
     author,
+    monitoringEvidence,
   } = options;
   const { doc, done } = newDocument();
   const w = pageContentWidth(doc);
@@ -253,7 +287,8 @@ export async function buildPdfReport(options: ReportOptions): Promise<Buffer> {
   }
 
   y = samplerTable(doc, MARGIN, y, w, summary);
-  errorsTable(doc, MARGIN, y, w, summary.errors);
+  y = errorsTable(doc, MARGIN, y, w, summary.errors);
+  if (monitoringEvidence?.length) monitoringEvidenceSection(doc, MARGIN, y, w, monitoringEvidence);
 
   footers(
     doc,

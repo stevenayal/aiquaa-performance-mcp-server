@@ -1,6 +1,13 @@
 name: JMeter NASAAPOD
 on:
   workflow_dispatch:
+    inputs:
+      monitoring_dashboard_url:
+        description: >-
+          URL pública de dashboard de monitoreo (Grafana, etc.) a capturar como evidencia
+          post-ejecución; dejar vacío para omitir la captura.
+        required: false
+        default: https://purplespinach239.grafana.net/public-dashboards/ce95c3fa413048d3a79d3c6fc60de958
 permissions:
   contents: read
 jobs:
@@ -36,11 +43,36 @@ jobs:
       - run: npm run build
       - name: Evaluate thresholds
         run: node dist/server.js --evaluate test-results/performance/R_NASAAPOD.jtl tests/performance/thresholds/thresholds.json
+      - name: Set up Python
+        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install monitoring capture dependencies
+        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        run: pip install -r src/monitoring/python/requirements.txt
+      - name: Capture monitoring dashboard evidence
+        # Chrome ships preinstalled on GitHub-hosted ubuntu-latest runners, so
+        # Selenium Manager (bundled with Selenium >=4.6) resolves a matching
+        # driver on its own; no extra browser/driver setup step is needed.
+        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        run: |
+          mkdir -p test-results/performance/evidence
+          python3 src/monitoring/python/capture_dashboard.py \
+            --url "${{ inputs.monitoring_dashboard_url }}" \
+            --output test-results/performance/evidence/EVIDENCIA_MONITOREO.png \
+            --wait-seconds 5
       - name: Generate PDF report
         run: |
+          EVIDENCE_ARGS=()
+          if [ -f test-results/performance/evidence/EVIDENCIA_MONITOREO.png ]; then
+            EVIDENCE_ARGS=(--evidence-image test-results/performance/evidence/EVIDENCIA_MONITOREO.png \
+              --evidence-label "Dashboard de monitoreo" \
+              --evidence-url "${{ inputs.monitoring_dashboard_url }}")
+          fi
           node dist/server.js --report test-results/performance/R_NASAAPOD.jtl tests/performance/thresholds/thresholds.json test-results/performance/INFORME_PERF_NASAAPOD.pdf \
             --api-name "NASA APOD (api.nasa.gov)" --test-type smoke --threads 1 --loops 1 \
-            --repo-url https://api.nasa.gov/planetary/apod
+            --repo-url https://api.nasa.gov/planetary/apod "${EVIDENCE_ARGS[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

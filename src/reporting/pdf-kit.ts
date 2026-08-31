@@ -208,6 +208,55 @@ export function embedSvg(
   SVGtoPDF(doc, svg, x, y, { preserveAspectRatio: "xMinYMin meet", ...options });
 }
 
+/** Reads width/height straight from a PNG's IHDR chunk (bytes 16-23, big-endian). */
+function pngDimensions(png: Buffer): { width: number; height: number } {
+  if (png.length < 24 || png.readUInt32BE(0) !== 0x89504e47) return { width: 0, height: 0 };
+  return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+}
+
+export interface EmbedImageOptions {
+  caption?: string | undefined;
+  sourceUrl?: string | undefined;
+  capturedAt?: string | undefined;
+}
+
+/** Bordered card with a proportionally scaled PNG plus caption/metadata below it. Paginates via ensureSpace. */
+export function embedImage(
+  doc: Doc,
+  x: number,
+  startY: number,
+  w: number,
+  image: Buffer,
+  options: EmbedImageOptions = {},
+): number {
+  const { width: imgW, height: imgH } = pngDimensions(image);
+  const scale = imgW > 0 ? Math.min(1, w / imgW) : 1;
+  const drawW = imgW > 0 ? imgW * scale : w;
+  const drawH = imgH > 0 ? imgH * scale : w * 0.5625;
+  let y = ensureSpace(doc, startY, drawH + 44);
+  doc
+    .roundedRect(x, y, w, drawH + 4, 4)
+    .strokeColor(COLORS.grayBorder)
+    .lineWidth(0.5)
+    .stroke();
+  doc.image(image, x + (w - drawW) / 2, y + 2, { width: drawW, height: drawH });
+  y += drawH + 10;
+  if (options.caption) {
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(COLORS.grayDark).text(options.caption, x, y, { width: w });
+    y += 13;
+  }
+  const metaParts = [options.sourceUrl, options.capturedAt].filter(Boolean) as string[];
+  if (metaParts.length) {
+    doc
+      .font("Helvetica")
+      .fontSize(7.5)
+      .fillColor(COLORS.grayMid)
+      .text(metaParts.join("  ·  "), x, y, { width: w });
+    y += 12;
+  }
+  return y + 8;
+}
+
 export function pill(doc: Doc, x: number, y: number, text: string, fg: string, bg: string, w: number): number {
   const h = 14;
   doc.roundedRect(x, y, w, h, 3).fill(bg);

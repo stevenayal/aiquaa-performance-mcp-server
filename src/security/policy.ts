@@ -25,6 +25,28 @@ export function safeRelativePath(input: string): string {
     throw new Error("Path traversal bloqueado.");
   return normalized;
 }
+const PRIVATE_HOST_PATTERN =
+  /^(localhost|127(\.\d+){3}|0\.0\.0\.0|::1|10(\.\d+){3}|172\.(1[6-9]|2\d|3[01])(\.\d+){2}|192\.168(\.\d+){2}|169\.254(\.\d+){2})$/i;
+export function evaluateMonitoringTarget(dashboardUrl: string): SafetyDecision {
+  let url: URL;
+  try {
+    url = new URL(dashboardUrl);
+  } catch {
+    return { allowed: false, reasons: ["dashboard_url inválida."], warnings: [] };
+  }
+  const reasons: string[] = [];
+  const warnings: string[] = [];
+  if (url.protocol !== "http:" && url.protocol !== "https:")
+    reasons.push(`Protocolo ${url.protocol} no permitido; use http o https.`);
+  const host = url.hostname.toLowerCase();
+  const allowedPrivateHosts = list(process.env.PERF_MONITORING_ALLOWED_PRIVATE_HOSTS);
+  if (PRIVATE_HOST_PATTERN.test(host) && !allowedPrivateHosts.includes(host))
+    reasons.push(
+      `El host ${host} es privado/loopback; agréguelo a PERF_MONITORING_ALLOWED_PRIVATE_HOSTS si es intencional.`,
+    );
+  if (url.protocol !== "https:") warnings.push("El dashboard no usa HTTPS.");
+  return { allowed: reasons.length === 0, reasons, warnings };
+}
 export function evaluateExecution(
   targetUrl: string,
   model: LoadModel,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseRequirement } from "./analyzers/requirement.js";
 import { compareJtl } from "./comparison/compare.js";
 import { generatePerformanceFiles } from "./jmeter/generator/index.js";
@@ -6,9 +6,15 @@ import { parseJmx } from "./jmeter/parser/index.js";
 import { validateJmx } from "./jmeter/validator/index.js";
 import { deriveLoadModel, presetModel } from "./load-model/presets.js";
 import { analyzeJtl, buildTimeline } from "./results/jtl.js";
-import { evaluateExecution, redactSecrets, safeRelativePath } from "./security/policy.js";
+import {
+  evaluateExecution,
+  evaluateMonitoringTarget,
+  redactSecrets,
+  safeRelativePath,
+} from "./security/policy.js";
 import { planPullRequest } from "./github/pull-request.js";
 import { RequirementSchema } from "./schemas/common.js";
+import { MonitoringCaptureInputSchema } from "./schemas/tools.js";
 import { evaluateThreshold } from "./thresholds/evaluate.js";
 import { generatePipeline } from "./pipelines/generator.js";
 import { buildPdfReport } from "./reporting/pdf.js";
@@ -238,5 +244,60 @@ describe("security and PR planning", () => {
     expect(plan.branch).toBe("test/performance/nfr-18");
     expect(plan.draft).toBe(true);
     expect(plan.files[0]?.content).not.toContain("secret");
+  });
+});
+describe("monitoring evidence", () => {
+  const onePixelPngBase64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+  it("applies defaults and rejects unknown fields", () => {
+    const parsed = MonitoringCaptureInputSchema.parse({
+      dashboard_url: "https://example.test/dashboard",
+      response_format: "json",
+    });
+    expect(parsed.label).toBe("Evidencia de monitoreo");
+    expect(parsed.wait_seconds).toBe(5);
+    expect(parsed.full_page).toBe(true);
+    expect(() =>
+      MonitoringCaptureInputSchema.parse({
+        dashboard_url: "https://example.test/dashboard",
+        response_format: "json",
+        extra: "not allowed",
+      }),
+    ).toThrow();
+  });
+  it("allows a public https dashboard", () => {
+    expect(evaluateMonitoringTarget("https://example.test/dashboard").allowed).toBe(true);
+  });
+  it("blocks non-http(s) protocols", () => {
+    const decision = evaluateMonitoringTarget("file:///etc/passwd");
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasons.length).toBeGreaterThan(0);
+  });
+  it("blocks loopback hosts unless explicitly allowlisted", () => {
+    expect(evaluateMonitoringTarget("http://localhost/dashboard").allowed).toBe(false);
+    vi.stubEnv("PERF_MONITORING_ALLOWED_PRIVATE_HOSTS", "localhost");
+    try {
+      expect(evaluateMonitoringTarget("http://localhost/dashboard").allowed).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it("renders a monitoring evidence section into the PDF", async () => {
+    const summary = analyzeJtl(jtl([100, 200]), [{ scope: "global", p95Ms: 500 }]);
+    const pdf = await buildPdfReport({
+      summary,
+      thresholds: [{ scope: "global", p95Ms: 500 }],
+      apiName: "Demo API",
+      monitoringEvidence: [
+        {
+          label: "Dashboard de monitoreo",
+          sourceUrl: "https://example.test/dashboard",
+          capturedAt: new Date().toISOString(),
+          image: Buffer.from(onePixelPngBase64, "base64"),
+        },
+      ],
+    });
+    expect(pdf.subarray(0, 4).toString("latin1")).toBe("%PDF");
+    expect(pdf.length).toBeGreaterThan(1000);
   });
 });

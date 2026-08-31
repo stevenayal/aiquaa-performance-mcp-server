@@ -14,7 +14,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/monitoring/python','dist/monitoring/python',{recursive:true})\"",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
     "lint": "eslint .",
