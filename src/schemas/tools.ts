@@ -125,6 +125,14 @@ export const PipelineInputSchema = z
     response_format: ResponseFormatSchema,
   })
   .strict();
+export const MonitoringEvidenceSchema = z
+  .object({
+    label: z.string().min(1),
+    source_url: z.string().url(),
+    captured_at: z.string(),
+    image_base64: z.string().min(1),
+  })
+  .strict();
 export const ReportInputSchema = z
   .object({
     jtl: z.string().min(1),
@@ -139,6 +147,20 @@ export const ReportInputSchema = z
     repo_url: z.string().optional(),
     author: z.string().optional(),
     output_path: z.string().default("test-results/performance/INFORME_PERF.pdf"),
+    monitoring_evidence: z.array(MonitoringEvidenceSchema).default([]),
+  })
+  .strict();
+export const MonitoringCaptureInputSchema = z
+  .object({
+    dashboard_url: z.string().url(),
+    label: z.string().min(1).default("Evidencia de monitoreo"),
+    output_path: z.string().default("test-results/performance/evidence/EVIDENCIA_MONITOREO.png"),
+    wait_seconds: z.number().min(0).max(120).default(5),
+    width: z.number().int().positive().max(3840).default(1440),
+    height: z.number().int().positive().max(2160).default(900),
+    full_page: z.boolean().default(true),
+    timeout_seconds: z.number().int().positive().max(180).default(30),
+    response_format: ResponseFormatSchema,
   })
   .strict();
 export const TelemetryInputSchema = z

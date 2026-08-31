@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""Capture a screenshot of a monitoring dashboard (Grafana, etc.) as PDF report evidence.
+
+Invoked by src/monitoring/capture.ts as a subprocess with an explicit argv
+array (never through a shell). Prints a single JSON object to stdout on
+success; on failure prints a JSON error object to stderr and exits non-zero.
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Capture a monitoring dashboard screenshot.")
+    parser.add_argument("--url", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--wait-seconds", type=float, default=5.0)
+    parser.add_argument("--width", type=int, default=1440)
+    parser.add_argument("--height", type=int, default=900)
+    parser.add_argument("--timeout-seconds", type=int, default=30)
+    parser.add_argument("--full-page", action="store_true")
+    return parser.parse_args()
+
+
+def build_driver(width: int, height: int, timeout_seconds: int):
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument(f"--window-size={width},{height}")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    # Selenium >=4.6 resolves a matching chromedriver on its own (Selenium
+    # Manager); no webdriver-manager or manual driver path is needed.
+    driver = webdriver.Chrome(options=options)
+    driver.set_page_load_timeout(timeout_seconds)
+    return driver
+
+
+def capture(url: str, output: str, wait_seconds: float, width: int, height: int,
+            timeout_seconds: int, full_page: bool) -> dict:
+    driver = build_driver(width, height, timeout_seconds)
+    try:
+        driver.get(url)
+        # Dashboards like Grafana render panels asynchronously after load;
+        # give them time to finish drawing before capturing.
+        time.sleep(wait_seconds)
+        os.makedirs(os.path.dirname(os.path.abspath(output)) or ".", exist_ok=True)
+        captured_full_page = False
+        if full_page and hasattr(driver, "save_full_page_screenshot_as_file"):
+            driver.save_full_page_screenshot_as_file(output)
+            captured_full_page = True
+        else:
+            driver.save_screenshot(output)
+        size = driver.get_window_size()
+        return {
+            "path": os.path.abspath(output),
+            "url": url,
+            "capturedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+                "+00:00", "Z"
+            ),
+            "widthPx": size.get("width", width),
+            "heightPx": size.get("height", height),
+            "fullPage": captured_full_page,
+        }
+    finally:
+        driver.quit()
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        result = capture(
+            args.url,
+            args.output,
+            args.wait_seconds,
+            args.width,
+            args.height,
+            args.timeout_seconds,
+            args.full_page,
+        )
+    except Exception as error:  # noqa: BLE001 - surfaced as a structured error to the caller
+        sys.stderr.write(json.dumps({"error": str(error)}) + "\n")
+        return 1
+    sys.stdout.write(json.dumps(result) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

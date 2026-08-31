@@ -106,7 +106,8 @@ async function reportCli(args: string[]): Promise<void> {
     throw new Error(
       "Uso: --report <results.jtl> <thresholds.json> <output.pdf> " +
         "[--api-name X] [--test-type Y] [--threads N] [--loops N] " +
-        "[--baseline baseline.jtl] [--api-version V] [--repo-url URL] [--author A]",
+        "[--baseline baseline.jtl] [--api-version V] [--repo-url URL] [--author A] " +
+        "[--evidence-image evidence.png] [--evidence-label L] [--evidence-url URL] [--evidence-captured-at ISO]",
     );
   const flags = parseFlags(rest);
   const [jtl, thresholds] = await Promise.all([
@@ -119,6 +120,16 @@ async function reportCli(args: string[]): Promise<void> {
     ? compareJtl(baselineJtl, jtl, thresholds, {}, {}, 10)
     : undefined;
   const timeline = buildTimeline(jtl);
+  const monitoringEvidence = flags["evidence-image"]
+    ? [
+        {
+          label: flags["evidence-label"] ?? "Evidencia de monitoreo",
+          sourceUrl: flags["evidence-url"] ?? "",
+          capturedAt: flags["evidence-captured-at"] ?? new Date().toISOString(),
+          image: await readFile(flags["evidence-image"]),
+        },
+      ]
+    : [];
   const pdf = await buildPdfReport({
     summary,
     comparison,
@@ -131,6 +142,7 @@ async function reportCli(args: string[]): Promise<void> {
     apiVersion: flags["api-version"],
     repoUrl: flags["repo-url"],
     author: flags.author,
+    monitoringEvidence,
   });
   await mkdir(path.dirname(outputPath), { recursive: true });
   await writeFile(outputPath, pdf);

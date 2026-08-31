@@ -67,7 +67,8 @@ Las operaciones de lectura son puras. La generación devuelve archivos, pero no 
 | `perf_pipeline`   | GitHub Actions o Azure Pipelines headless con artifacts y thresholds                 |
 | `perf_cambios`    | Plan previo de archivos, cobertura estimada, riesgo y supuestos                      |
 | `perf_pr`         | Plan dry-run o rama + archivos + draft PR mediante Octokit                           |
-| `perf_informe`    | Informe PDF (portada, veredicto, percentiles, comparación, detalle por sampler)      |
+| `perf_monitoreo`  | Captura (Python + Selenium) evidencia de un dashboard de monitoreo externo (Grafana, Datadog, etc.) para adjuntar al informe |
+| `perf_informe`    | Informe PDF (portada, veredicto, percentiles, comparación, detalle por sampler, evidencia de monitoreo opcional) |
 
 Todas aceptan `response_format`: `json`, `markdown`, `files` o `patch`, salvo `perf_informe`,
 que siempre devuelve el PDF embebido en base64 (`resource` con `mimeType: application/pdf`)
@@ -130,7 +131,8 @@ O generar el mismo informe PDF que produce `perf_informe`, sin pasar por MCP:
 ```bash
 npx -y aiquaa-performance-mcp-server --report test-results/performance/R_API.jtl tests/performance/thresholds/thresholds.json test-results/performance/INFORME_PERF_API.pdf \
   --api-name "Mi API" --test-type smoke --threads 1 --loops 1 \
-  --baseline test-results/performance/R_BASELINE.jtl --api-version v1.2.0 --repo-url https://github.com/org/repo --author "Nombre"
+  --baseline test-results/performance/R_BASELINE.jtl --api-version v1.2.0 --repo-url https://github.com/org/repo --author "Nombre" \
+  --evidence-image test-results/performance/evidence/EVIDENCIA_MONITOREO.png --evidence-label "Dashboard de monitoreo" --evidence-url https://example.grafana.net/public-dashboards/xxx
 ```
 
 ## Seguridad de ejecución
@@ -152,6 +154,8 @@ Variables:
 | `PERF_ALLOWED_HOSTS`, `PERF_PRODUCTION_HOSTS`                            | Allowlist y protección de producción |
 | `PERF_MAX_THREADS`, `PERF_MAX_DURATION_SECONDS`, `PERF_MAX_ARRIVAL_RATE` | Límites duros                        |
 | `PERF_ALLOW_EXECUTION`                                                   | Kill switch; `false` por defecto     |
+| `PERF_MONITORING_PYTHON_BIN`                                             | Binario de Python para `perf_monitoreo`; `python3` por defecto |
+| `PERF_MONITORING_ALLOWED_PRIVATE_HOSTS`                                  | Allowlist de hosts privados/loopback para `perf_monitoreo` |
 | `GITHUB_TOKEN`, `GITHUB_API_URL`                                         | Draft PR                             |
 | `AIQUAA_API_BASE_URL`, `AIQUAA_ACCESS_TOKEN`                             | Adapter AIQUAA                       |
 | `CODEGRAPH_BIN`, `CODEGRAPH_ALLOWED_ROOTS`                               | Contexto estructural opcional        |
@@ -175,6 +179,31 @@ El body proporcionado debe documentar requisito, tipo/modelo, endpoints, carga, 
 
 El `Dockerfile` construye TypeScript con Node 20 y ejecuta sobre Java 17 con JMeter 5.6.3. GitHub Actions valida lint, build, pruebas, cobertura mínima de 70%, paquete npm y build de imagen. La publicación npm se dispara desde releases, usa OIDC/trusted publishing y `--provenance`; no necesita un token npm persistente.
 
+## Evidencia de monitoreo (Python + Selenium)
+
+`perf_monitoreo` automatiza, con Python + Selenium, lo que antes se armaba a mano: abrir un dashboard
+de monitoreo público (por ejemplo, Grafana) y capturarlo como evidencia dentro del informe PDF. Caso
+típico: un dashboard público de Grafana que muestra el estado de una base de datos durante la corrida
+(como el usado para mostrarles a los alumnos qué observar mientras corre una prueba de rendimiento).
+
+Requiere Python 3 aparte del runtime Node del servidor:
+
+```bash
+pip install -r src/monitoring/python/requirements.txt
+```
+
+Selenium ≥4.6 resuelve el driver de Chrome por sí solo (Selenium Manager), sin `webdriver-manager` ni
+configuración manual; sólo hace falta tener Chrome/Chromium instalado. `perf_monitoreo` no ejecuta nada
+si el host del dashboard es privado/loopback, salvo que esté en `PERF_MONITORING_ALLOWED_PRIVATE_HOSTS`.
+
+Flujo recomendado post-ejecución: `perf_ejecutar` → `perf_resultados` → (opcional) `perf_monitoreo` con
+la URL del dashboard → `perf_informe` pasando el resultado en `monitoring_evidence`. Un agente que orquesta
+este flujo debe preguntarle al usuario si necesita evidencia de monitoreo antes de invocar `perf_monitoreo`
+(así lo indica la descripción de la tool); si no la necesita, se salta directo a `perf_informe`.
+
+El mismo adjunto se puede generar sin pasar por MCP con la CLI `--report` (ver más abajo), usando
+`--evidence-image`, `--evidence-label`, `--evidence-url` y `--evidence-captured-at`.
+
 ## Ejemplo de flujo MCP
 
 > Analizá el repositorio y NFR-018. El requisito establece 150 usuarios concurrentes, P95 < 2 s y error rate < 0,5%. Revisá auth, JMX y baseline; no dupliques samplers. Planificá cambios, ampliá el plan, generá CSV ficticio, thresholds y diff. Después prepará el draft PR. No ejecutes la prueba.
@@ -194,3 +223,4 @@ De `aiquaa-playwright-mcp-server` se reutilizó el patrón de `McpServer` + Stre
 - Los percentiles se calculan en memoria; aplique límites externos para JTL muy grandes.
 - `perf_informe` genera el PDF con `pdfkit` (sin dependencias de Python) a partir de lo que ya calcula `perf_resultados`/`perf_comparar`; el dashboard HTML de JMeter (`-e -o`) sigue siendo aparte, vía los pipelines de `perf_pipeline`.
 - La ampliación localizada usa nombres de sampler como clave de identidad; renombres manuales pueden requerir revisión.
+- `perf_monitoreo` requiere Python 3 + Selenium instalados por separado (`src/monitoring/python/requirements.txt`); no están incluidos en el `Dockerfile` de este servidor ni en las dependencias de npm, y sólo hacen falta si se usa esa tool.

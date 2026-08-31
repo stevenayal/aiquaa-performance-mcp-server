@@ -34,6 +34,12 @@ export async function perfInforme(
     apiVersion: input.api_version,
     repoUrl: input.repo_url,
     author: input.author,
+    monitoringEvidence: input.monitoring_evidence.map((evidence) => ({
+      label: evidence.label,
+      sourceUrl: evidence.source_url,
+      capturedAt: evidence.captured_at,
+      image: Buffer.from(evidence.image_base64, "base64"),
+    })),
   });
   return {
     path: input.output_path,

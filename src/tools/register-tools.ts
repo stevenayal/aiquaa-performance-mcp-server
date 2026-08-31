@@ -7,6 +7,7 @@ import {
   CoverageInputSchema,
   ExecuteInputSchema,
   GenerateInputSchema,
+  MonitoringCaptureInputSchema,
   PipelineInputSchema,
   PullRequestInputSchema,
   ReportInputSchema,
@@ -31,6 +32,7 @@ import { perfPipeline } from "./perf-pipeline.js";
 import { perfCambios } from "./perf-cambios.js";
 import { perfPr } from "./perf-pr.js";
 import { perfInforme } from "./perf-informe.js";
+import { perfMonitoreo } from "./perf-monitoreo.js";
 import { perfTelemetria } from "./perf-telemetria.js";
 import { recordToolUsage } from "../telemetry/tokens.js";
 
@@ -49,6 +51,12 @@ const localWrite = {
 const remoteWrite = {
   readOnlyHint: false,
   destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const;
+const monitoringCapture = {
+  readOnlyHint: false,
+  destructiveHint: false,
   idempotentHint: false,
   openWorldHint: true,
 } as const;
@@ -219,11 +227,35 @@ export function registerTools(server: McpServer): void {
       }),
   );
   server.registerTool(
+    "perf_monitoreo",
+    {
+      title: "Capturar evidencia de monitoreo",
+      description:
+        "Usar DESPUÉS de ejecutar pruebas de rendimiento (perf_ejecutar) cuando el informe deba incluir evidencia de monitoreo " +
+        "externo (dashboards Grafana, Datadog u otro que muestre CPU, memoria, conexiones de base de datos, etc. durante o " +
+        "después de la corrida). Antes de invocar esta tool, preguntar al usuario si necesita evidencia de monitoreo para el " +
+        "informe y con qué URL de dashboard público; si no la necesita, omitir esta tool y pasar directamente a perf_informe. " +
+        "Abre dashboard_url en un navegador headless (Python + Selenium, proceso externo a Node; requiere Python 3 con " +
+        "Selenium instalado, ver README) y guarda una captura PNG. Bloquea protocolos distintos de http/https y hosts " +
+        "privados/loopback salvo que estén en PERF_MONITORING_ALLOWED_PRIVATE_HOSTS. El resultado (imagen en base64, URL de " +
+        "origen y timestamp) se puede pasar tal cual al campo monitoring_evidence de perf_informe.",
+      inputSchema: MonitoringCaptureInputSchema.shape,
+      annotations: monitoringCapture,
+    },
+    async (raw) =>
+      safe("perf_monitoreo", raw, async () => {
+        const input = MonitoringCaptureInputSchema.parse(raw);
+        return result(input.response_format, await perfMonitoreo(input));
+      }),
+  );
+  server.registerTool(
     "perf_informe",
     {
       title: "Generar informe PDF",
       description:
-        "Genera un informe PDF (portada, veredicto, percentiles, comparación opcional con baseline y detalle por sampler) a partir de un JTL ya calculado por perf_resultados. Devuelve el PDF embebido en base64; el cliente decide si lo persiste.",
+        "Genera un informe PDF (portada, veredicto, percentiles, comparación opcional con baseline, detalle por sampler y, si se " +
+        "pasa monitoring_evidence, una sección de evidencia de monitoreo post-ejecución con las capturas de perf_monitoreo) a " +
+        "partir de un JTL ya calculado por perf_resultados. Devuelve el PDF embebido en base64; el cliente decide si lo persiste.",
       inputSchema: ReportInputSchema.shape,
       annotations: localWrite,
     },
