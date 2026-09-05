@@ -1,6 +1,6 @@
 {
   "name": "aiquaa-performance-mcp-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for safe JMeter performance-test analysis, generation, execution and reporting.",
   "type": "module",
   "bin": {
