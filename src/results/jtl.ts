@@ -17,7 +17,7 @@ export interface TimelineBucket {
 }
 
 /** Buckets raw samples by elapsed time for a transactions/response-time-over-time chart. */
-export function buildTimeline(content: string, maxBuckets = 12): TimelineBucket[] {
+export function buildTimeline(content: string, maxBuckets = 24): TimelineBucket[] {
   const rows = parseCsv(content.trim());
   if (rows.length < 2) return [];
   const headers = rows[0] ?? [];

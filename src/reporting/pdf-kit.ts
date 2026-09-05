@@ -18,6 +18,12 @@ export const COLORS = {
   amberBg: "#FFFBEB",
   white: "#FFFFFF",
   chartBar: "#93C5FD",
+  panelBg: "#181B1F",
+  panelGrid: "#2C3235",
+  panelText: "#9FA6AD",
+  seriesGreen: "#73BF69",
+  seriesBlue: "#5794F2",
+  seriesRed: "#F2495C",
 } as const;
 
 export function newDocument(): { doc: Doc; done: Promise<Buffer> } {
@@ -272,6 +278,7 @@ export interface ChartPoint {
   tSeconds: number;
   count: number;
   avgMs: number;
+  errorCount?: number;
 }
 
 /** Evenly spaced, human-friendly axis ticks (0, step, 2·step, …) covering `max`. */
@@ -290,10 +297,31 @@ function niceTicks(max: number, targetCount = 4): number[] {
 
 const fmtNum = (value: number): string => value.toLocaleString("es-AR");
 
+/** Smooth series path through `pts` using midpoint bezier control points. */
+function seriesPath(doc: Doc, pts: { x: number; y: number }[]): void {
+  pts.forEach((p, i) => {
+    if (i === 0) {
+      doc.moveTo(p.x, p.y);
+      return;
+    }
+    const prev = pts[i - 1];
+    if (!prev) return;
+    const midX = (prev.x + p.x) / 2;
+    doc.bezierCurveTo(midX, prev.y, midX, p.y, p.x, p.y);
+  });
+}
+
+/** Draws one legend swatch and its label, returning the x after it. */
+function legendItem(doc: Doc, x: number, y: number, color: string, label: string): number {
+  doc.roundedRect(x, y, 8, 8, 2).fill(color);
+  doc.font("Helvetica").fontSize(7).fillColor(COLORS.panelText).text(label, x + 12, y + 0.5);
+  return x + 12 + doc.widthOfString(label) + 16;
+}
+
 /**
- * Transactions/interval (bars, left axis) + average response time (line, right
- * axis) over the run's duration, drawn as a bordered card. Returns the y
- * position right after the chart.
+ * Grafana-style dark panel plotting average response time (green area, left
+ * axis) and throughput (blue line, right axis) over the run, with failing
+ * intervals marked in red. Returns the y position right after the chart.
  */
 export function timeSeriesChart(
   doc: Doc,
@@ -303,12 +331,12 @@ export function timeSeriesChart(
   h: number,
   points: ChartPoint[],
 ): number {
-  doc.roundedRect(x, startY, w, h, 4).fillAndStroke(COLORS.white, COLORS.grayBorder);
+  doc.roundedRect(x, startY, w, h, 3).fill(COLORS.panelBg);
   if (!points.length) {
     doc
       .font("Helvetica")
       .fontSize(8)
-      .fillColor(COLORS.grayMid)
+      .fillColor(COLORS.panelText)
       .text("Sin datos suficientes para graficar la línea de tiempo.", x, startY + h / 2 - 4, {
         width: w,
         align: "center",
@@ -316,124 +344,100 @@ export function timeSeriesChart(
     return startY + h;
   }
 
-  const axisLeft = x + 34;
-  const axisRight = x + w - 34;
-  const axisTop = startY + 14;
-  const axisBottom = startY + h - 26;
+  const axisLeft = x + 38;
+  const axisRight = x + w - 38;
+  const axisTop = startY + 16;
+  const axisBottom = startY + h - 30;
   const plotW = axisRight - axisLeft;
   const plotH = axisBottom - axisTop;
-  const countTicks = niceTicks(Math.max(...points.map((p) => p.count)));
   const msTicks = niceTicks(Math.max(...points.map((p) => p.avgMs)));
-  const maxCount = countTicks.at(-1) ?? 1;
+  const countTicks = niceTicks(Math.max(...points.map((p) => p.count)));
   const maxMs = msTicks.at(-1) ?? 1;
-  const slot = plotW / points.length;
-  const barW = Math.min(20, slot * 0.55);
+  const maxCount = countTicks.at(-1) ?? 1;
+  // Single points would divide by zero below; pin them to the plot's left edge.
+  const stepX = points.length > 1 ? plotW / (points.length - 1) : 0;
+  const atX = (i: number): number => axisLeft + stepX * i;
 
   doc
     .font("Helvetica-Bold")
     .fontSize(7)
-    .fillColor(COLORS.chartBar)
-    .text("TRANSACCIONES", x + 8, startY + 5, { width: plotW / 2, align: "left" });
+    .fillColor(COLORS.seriesGreen)
+    .text("TIEMPO DE RESPUESTA (MS)", x + 8, startY + 6, { width: plotW / 2, align: "left" });
   doc
-    .fillColor(COLORS.amberWarn)
-    .text("TIEMPO DE RESPUESTA (MS)", x, startY + 5, { width: w - 8, align: "right" });
+    .fillColor(COLORS.seriesBlue)
+    .text("TRANSACCIONES", x, startY + 6, { width: w - 8, align: "right" });
 
-  const tickCount = Math.max(countTicks.length, msTicks.length) - 1;
+  const tickCount = Math.max(msTicks.length, countTicks.length) - 1;
   for (let i = 0; i <= tickCount; i += 1) {
     const yy = axisBottom - (plotH * i) / tickCount;
-    doc
-      .moveTo(axisLeft, yy)
-      .lineTo(axisRight, yy)
-      .strokeColor(i === 0 ? COLORS.grayBorder : COLORS.grayLight)
-      .lineWidth(0.5)
-      .stroke();
-    const countValue = countTicks[i];
-    if (countValue !== undefined)
-      doc
-        .font("Helvetica")
-        .fontSize(7)
-        .fillColor(COLORS.grayMid)
-        .text(fmtNum(countValue), x, yy - 3, { width: axisLeft - x - 4, align: "right" });
+    doc.moveTo(axisLeft, yy).lineTo(axisRight, yy).strokeColor(COLORS.panelGrid).lineWidth(0.5).stroke();
+    doc.font("Helvetica").fontSize(7).fillColor(COLORS.panelText);
     const msValue = msTicks[i];
     if (msValue !== undefined)
-      doc.text(fmtNum(msValue), axisRight + 4, yy - 3, { width: x + w - axisRight - 6, align: "left" });
+      doc.text(fmtNum(msValue), x, yy - 3, { width: axisLeft - x - 5, align: "right" });
+    const countValue = countTicks[i];
+    if (countValue !== undefined)
+      doc.text(fmtNum(countValue), axisRight + 5, yy - 3, {
+        width: x + w - axisRight - 7,
+        align: "left",
+      });
   }
 
-  const barRadius = Math.min(3, barW / 2);
-  points.forEach((p, i) => {
-    const barH = Math.max(1, (p.count / maxCount) * plotH);
-    const cx = axisLeft + slot * i + slot / 2;
-    doc
-      .roundedRect(cx - barW / 2, axisBottom - barH, barW, barH, barRadius)
-      .fillOpacity(0.85)
-      .fill(COLORS.chartBar)
-      .fillOpacity(1);
-  });
-
-  const linePoints = points.map((p, i) => ({
-    x: axisLeft + slot * i + slot / 2,
+  const msPoints = points.map((p, i) => ({
+    x: atX(i),
     y: axisBottom - (p.avgMs / maxMs) * plotH,
   }));
+  const countPoints = points.map((p, i) => ({
+    x: atX(i),
+    y: axisBottom - (p.count / maxCount) * plotH,
+  }));
 
-  if (linePoints.length > 1) {
-    const first = linePoints[0];
-    const last = linePoints.at(-1);
-    if (first && last) {
-      doc.moveTo(first.x, axisBottom).lineTo(first.x, first.y);
-      for (let i = 1; i < linePoints.length; i += 1) {
-        const prev = linePoints[i - 1];
-        const curr = linePoints[i];
-        if (!prev || !curr) continue;
-        const midX = (prev.x + curr.x) / 2;
-        doc.bezierCurveTo(midX, prev.y, midX, curr.y, curr.x, curr.y);
-      }
-      doc.lineTo(last.x, axisBottom).closePath().fillOpacity(0.12).fill(COLORS.amberWarn).fillOpacity(1);
-    }
+  const first = msPoints[0];
+  const last = msPoints.at(-1);
+  if (first && last && msPoints.length > 1) {
+    doc.save();
+    doc.moveTo(first.x, axisBottom).lineTo(first.x, first.y);
+    seriesPath(doc, msPoints);
+    doc.lineTo(last.x, axisBottom).closePath().clip();
+    const gradient = doc.linearGradient(axisLeft, axisTop, axisLeft, axisBottom);
+    gradient.stop(0, COLORS.seriesGreen, 0.45).stop(1, COLORS.seriesGreen, 0.02);
+    doc.rect(axisLeft, axisTop, plotW, plotH).fill(gradient);
+    doc.restore();
   }
 
-  doc.strokeColor(COLORS.amberWarn).lineWidth(1.8);
-  linePoints.forEach((p, i) => {
-    if (i === 0) doc.moveTo(p.x, p.y);
-    else {
-      const prev = linePoints[i - 1];
-      if (!prev) return;
-      const midX = (prev.x + p.x) / 2;
-      doc.bezierCurveTo(midX, prev.y, midX, p.y, p.x, p.y);
-    }
-  });
+  doc.strokeColor(COLORS.seriesBlue).lineWidth(1).dash(3, { space: 2 });
+  seriesPath(doc, countPoints);
+  doc.stroke().undash();
+
+  doc.strokeColor(COLORS.seriesGreen).lineWidth(1.6);
+  seriesPath(doc, msPoints);
   doc.stroke();
-  linePoints.forEach((p) => {
-    doc.circle(p.x, p.y, 2.6).fill(COLORS.amberWarn);
-    doc.circle(p.x, p.y, 1.1).fill(COLORS.white);
+
+  points.forEach((p, i) => {
+    const point = msPoints[i];
+    if (!point) return;
+    const failing = (p.errorCount ?? 0) > 0;
+    doc.circle(point.x, point.y, failing ? 3 : 2).fill(failing ? COLORS.seriesRed : COLORS.seriesGreen);
   });
 
   const labelIndexes = new Set([0, Math.floor((points.length - 1) / 2), points.length - 1]);
   for (const i of labelIndexes) {
     const p = points[i];
     if (!p) continue;
-    const px = axisLeft + slot * i + slot / 2;
-    doc
-      .moveTo(px, axisBottom)
-      .lineTo(px, axisBottom + 3)
-      .strokeColor(COLORS.grayBorder)
-      .lineWidth(0.5)
-      .stroke();
+    const px = atX(i);
+    doc.moveTo(px, axisBottom).lineTo(px, axisBottom + 3).strokeColor(COLORS.panelGrid).lineWidth(0.5).stroke();
     doc
       .font("Helvetica")
       .fontSize(7)
-      .fillColor(COLORS.grayMid)
-      .text(`${p.tSeconds}s`, px - 16, axisBottom + 5, { width: 32, align: "center" });
+      .fillColor(COLORS.panelText)
+      .text(`${p.tSeconds}s`, px - 16, axisBottom + 6, { width: 32, align: "center" });
   }
 
-  const legendY = startY + h - 13;
-  doc.roundedRect(x + 8, legendY, 8, 8, 2).fill(COLORS.chartBar);
-  doc
-    .font("Helvetica")
-    .fontSize(7)
-    .fillColor(COLORS.grayMid)
-    .text("Transacciones por intervalo", x + 20, legendY);
-  doc.roundedRect(x + 165, legendY, 8, 8, 2).fill(COLORS.amberWarn);
-  doc.text("Tiempo de respuesta promedio (ms)", x + 177, legendY);
+  const legendY = startY + h - 15;
+  let legendX = legendItem(doc, x + 10, legendY, COLORS.seriesGreen, "Tiempo de respuesta promedio (ms)");
+  legendX = legendItem(doc, legendX, legendY, COLORS.seriesBlue, "Transacciones por intervalo");
+  if (points.some((p) => (p.errorCount ?? 0) > 0))
+    legendItem(doc, legendX, legendY, COLORS.seriesRed, "Intervalo con errores");
 
   return startY + h;
 }

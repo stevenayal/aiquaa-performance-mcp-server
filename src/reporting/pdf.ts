@@ -275,14 +275,14 @@ export async function buildPdfReport(options: ReportOptions): Promise<Buffer> {
   y += 14;
 
   if (timeline && timeline.length) {
-    y = ensureSpace(doc, y, 130);
+    y = ensureSpace(doc, y, 155);
     doc
       .font("Helvetica-Bold")
       .fontSize(12)
       .fillColor(COLORS.grayDark)
       .text("Transacciones y tiempo de respuesta durante la ejecución", MARGIN, y);
     y += 16;
-    y = timeSeriesChart(doc, MARGIN, y, w, 110, timeline);
+    y = timeSeriesChart(doc, MARGIN, y, w, 135, timeline);
     y += 14;
   }
 

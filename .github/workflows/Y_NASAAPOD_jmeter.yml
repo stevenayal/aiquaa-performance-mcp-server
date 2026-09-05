@@ -61,7 +61,8 @@ jobs:
           python3 src/monitoring/python/capture_dashboard.py \
             --url "${{ inputs.monitoring_dashboard_url }}" \
             --output test-results/performance/evidence/EVIDENCIA_MONITOREO.png \
-            --wait-seconds 5
+            --wait-seconds 8 \
+            --ready-timeout-seconds 180
       - name: Generate PDF report
         run: |
           EVIDENCE_ARGS=()
