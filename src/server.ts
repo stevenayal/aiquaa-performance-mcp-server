@@ -8,6 +8,7 @@ import { createPerformanceMcpServer } from "./app.js";
 import { DEFAULT_MCP_PATH, DEFAULT_PORT, SERVER_NAME, SERVER_VERSION } from "./constants.js";
 import { analyzeJtl, buildTimeline } from "./results/jtl.js";
 import { compareJtl } from "./comparison/compare.js";
+import { parseJmx } from "./jmeter/parser/index.js";
 import { buildPdfReport } from "./reporting/pdf.js";
 import type { ThresholdDefinition } from "./types.js";
 
@@ -106,7 +107,7 @@ async function reportCli(args: string[]): Promise<void> {
     throw new Error(
       "Uso: --report <results.jtl> <thresholds.json> <output.pdf> " +
         "[--api-name X] [--test-type Y] [--threads N] [--loops N] " +
-        "[--baseline baseline.jtl] [--api-version V] [--repo-url URL] [--author A] " +
+        "[--baseline baseline.jtl] [--api-version V] [--repo-url URL] [--author A] [--plan plan.jmx] " +
         "[--evidence-image evidence.png] [--evidence-label L] [--evidence-url URL] [--evidence-captured-at ISO]",
     );
   const flags = parseFlags(rest);
@@ -116,6 +117,15 @@ async function reportCli(args: string[]): Promise<void> {
   ]);
   const baselineJtl = flags.baseline ? await readFile(flags.baseline, "utf8") : undefined;
   const summary = analyzeJtl(jtl, thresholds);
+  // The JTL records each sampler's URL but not its HTTP verb, so the verb is
+  // recovered from the plan when the caller points at it.
+  if (flags.plan) {
+    const { requests } = parseJmx(await readFile(flags.plan, "utf8"));
+    for (const operation of summary.operations) {
+      const method = requests.find((request) => request.name === operation.label)?.method;
+      if (method) operation.method = method;
+    }
+  }
   const comparison = baselineJtl
     ? compareJtl(baselineJtl, jtl, thresholds, {}, {}, 10)
     : undefined;

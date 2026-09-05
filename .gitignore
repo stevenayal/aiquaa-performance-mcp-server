@@ -6,3 +6,5 @@ coverage/
 test-results/performance/
 *.log
 apache-jmeter-*/
+__pycache__/
+*.pyc

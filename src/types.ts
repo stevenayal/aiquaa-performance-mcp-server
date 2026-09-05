@@ -83,6 +83,8 @@ export interface OperationMetric {
   p99Ms: number;
   bytes: number;
   verdict: Verdict;
+  endpoint?: string | undefined;
+  method?: string | undefined;
 }
 export interface JtlSummary extends OperationMetric {
   operations: OperationMetric[];

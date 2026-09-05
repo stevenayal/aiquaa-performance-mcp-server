@@ -15,6 +15,7 @@ export interface MonitoringCaptureInput {
   height: number;
   fullPage: boolean;
   timeoutSeconds: number;
+  readyTimeoutSeconds?: number;
 }
 export type MonitoringCaptureOutcome =
   | { captured: false; safety: SafetyDecision }
@@ -49,6 +50,7 @@ export async function captureMonitoringEvidence(
   await mkdir(path.dirname(output), { recursive: true });
   const script = path.join(moduleDir, "python", "capture_dashboard.py");
   const pythonBin = process.env.PERF_MONITORING_PYTHON_BIN?.trim() || "python3";
+  const readyTimeoutSeconds = input.readyTimeoutSeconds ?? 120;
   const args = [
     script,
     "--url",
@@ -63,9 +65,12 @@ export async function captureMonitoringEvidence(
     String(input.height),
     "--timeout-seconds",
     String(input.timeoutSeconds),
+    "--ready-timeout-seconds",
+    String(readyTimeoutSeconds),
     ...(input.fullPage ? ["--full-page"] : []),
   ];
-  const timeoutMs = (input.timeoutSeconds + input.waitSeconds + 30) * 1000;
+  const timeoutMs =
+    (input.timeoutSeconds + input.waitSeconds + readyTimeoutSeconds + 30) * 1000;
   const stdout = await run(pythonBin, args, process.cwd(), timeoutMs);
   const meta = JSON.parse(stdout) as PythonCaptureResult;
   const png = await readFile(output);

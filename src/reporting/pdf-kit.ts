@@ -18,6 +18,14 @@ export const COLORS = {
   amberBg: "#FFFBEB",
   white: "#FFFFFF",
   chartBar: "#93C5FD",
+  panelBg: "#181B1F",
+  panelGrid: "#2C3235",
+  panelText: "#9FA6AD",
+  seriesGreen: "#73BF69",
+  seriesBlue: "#5794F2",
+  seriesRed: "#F2495C",
+  percentileP90: "#FADE2A",
+  percentileP95: "#FF9830",
 } as const;
 
 export function newDocument(): { doc: Doc; done: Promise<Buffer> } {
@@ -272,6 +280,17 @@ export interface ChartPoint {
   tSeconds: number;
   count: number;
   avgMs: number;
+  errorCount?: number;
+  bucketSeconds?: number;
+}
+
+/** Percentile reference lines overlaid on the response-time chart. */
+export interface PercentileMarkers {
+  averageMs?: number;
+  medianMs?: number;
+  p90Ms?: number;
+  p95Ms?: number;
+  p99Ms?: number;
 }
 
 /** Evenly spaced, human-friendly axis ticks (0, step, 2·step, …) covering `max`. */
@@ -290,12 +309,233 @@ function niceTicks(max: number, targetCount = 4): number[] {
 
 const fmtNum = (value: number): string => value.toLocaleString("es-AR");
 
+/** Smooth series path through `pts` using midpoint bezier control points. */
+function seriesPath(doc: Doc, pts: { x: number; y: number }[]): void {
+  pts.forEach((p, i) => {
+    if (i === 0) {
+      doc.moveTo(p.x, p.y);
+      return;
+    }
+    const prev = pts[i - 1];
+    if (!prev) return;
+    const midX = (prev.x + p.x) / 2;
+    doc.bezierCurveTo(midX, prev.y, midX, p.y, p.x, p.y);
+  });
+}
+
+/** Draws one legend swatch and its label, returning the x after it. */
+function legendItem(doc: Doc, x: number, y: number, color: string, label: string): number {
+  doc.roundedRect(x, y, 8, 8, 2).fill(color);
+  doc.font("Helvetica").fontSize(7).fillColor(COLORS.panelText).text(label, x + 12, y + 0.5);
+  return x + 12 + doc.widthOfString(label) + 16;
+}
+
+interface PanelPlot {
+  axisLeft: number;
+  axisRight: number;
+  axisTop: number;
+  axisBottom: number;
+  plotW: number;
+  plotH: number;
+  atX: (index: number) => number;
+}
+
 /**
- * Transactions/interval (bars, left axis) + average response time (line, right
- * axis) over the run's duration, drawn as a bordered card. Returns the y
- * position right after the chart.
+ * Draws the shared Grafana-style dark panel (background, title, y grid + labels,
+ * x axis ticks) and returns its plot geometry, or undefined when there is
+ * nothing to plot.
  */
-export function timeSeriesChart(
+function panelFrame(
+  doc: Doc,
+  x: number,
+  startY: number,
+  w: number,
+  h: number,
+  title: string,
+  titleColor: string,
+  points: ChartPoint[],
+  yTicks: number[],
+  unitSuffix: string,
+): PanelPlot | undefined {
+  doc.roundedRect(x, startY, w, h, 3).fill(COLORS.panelBg);
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(7)
+    .fillColor(titleColor)
+    .text(title, x + 8, startY + 6, { width: w - 16, align: "left" });
+  if (!points.length) {
+    doc
+      .font("Helvetica")
+      .fontSize(8)
+      .fillColor(COLORS.panelText)
+      .text("Sin datos suficientes para graficar la línea de tiempo.", x, startY + h / 2 - 4, {
+        width: w,
+        align: "center",
+      });
+    return undefined;
+  }
+
+  const axisLeft = x + 42;
+  const axisRight = x + w - 14;
+  const axisTop = startY + 18;
+  const axisBottom = startY + h - 28;
+  const plotW = axisRight - axisLeft;
+  const plotH = axisBottom - axisTop;
+  // A single bucket would divide by zero below; pin it to the plot's left edge.
+  const stepX = points.length > 1 ? plotW / (points.length - 1) : 0;
+  const atX = (index: number): number => axisLeft + stepX * index;
+
+  const tickCount = yTicks.length - 1;
+  yTicks.forEach((value, i) => {
+    const yy = axisBottom - (plotH * i) / tickCount;
+    doc.moveTo(axisLeft, yy).lineTo(axisRight, yy).strokeColor(COLORS.panelGrid).lineWidth(0.5).stroke();
+    doc
+      .font("Helvetica")
+      .fontSize(7)
+      .fillColor(COLORS.panelText)
+      .text(`${fmtNum(value)}${unitSuffix}`, x, yy - 3, { width: axisLeft - x - 5, align: "right" });
+  });
+
+  const labelIndexes = new Set([0, Math.floor((points.length - 1) / 2), points.length - 1]);
+  for (const i of labelIndexes) {
+    const p = points[i];
+    if (!p) continue;
+    const px = atX(i);
+    doc.moveTo(px, axisBottom).lineTo(px, axisBottom + 3).strokeColor(COLORS.panelGrid).lineWidth(0.5).stroke();
+    doc
+      .font("Helvetica")
+      .fontSize(7)
+      .fillColor(COLORS.panelText)
+      .text(`${p.tSeconds}s`, px - 16, axisBottom + 6, { width: 32, align: "center" });
+  }
+
+  return { axisLeft, axisRight, axisTop, axisBottom, plotW, plotH, atX };
+}
+
+/** Fills the region between a series and the panel floor with a vertical gradient. */
+function fillUnderSeries(doc: Doc, plot: PanelPlot, pts: { x: number; y: number }[], color: string): void {
+  const first = pts[0];
+  const last = pts.at(-1);
+  if (!first || !last || pts.length < 2) return;
+  doc.save();
+  doc.moveTo(first.x, plot.axisBottom).lineTo(first.x, first.y);
+  seriesPath(doc, pts);
+  doc.lineTo(last.x, plot.axisBottom).closePath().clip();
+  const gradient = doc.linearGradient(plot.axisLeft, plot.axisTop, plot.axisLeft, plot.axisBottom);
+  gradient.stop(0, color, 0.45).stop(1, color, 0.02);
+  doc.rect(plot.axisLeft, plot.axisTop, plot.plotW, plot.plotH).fill(gradient);
+  doc.restore();
+}
+
+const PERCENTILE_COLORS = {
+  medianMs: COLORS.panelText,
+  p90Ms: COLORS.percentileP90,
+  p95Ms: COLORS.percentileP95,
+  p99Ms: COLORS.seriesRed,
+} as const;
+
+/**
+ * Grafana-style panel of average response time over the run (green gradient
+ * area), with the run's median/p90/p95/p99 drawn as labelled reference lines
+ * and intervals containing failures marked in red. Returns the y position right
+ * after the chart.
+ */
+export function responseTimeChart(
+  doc: Doc,
+  x: number,
+  startY: number,
+  w: number,
+  h: number,
+  points: ChartPoint[],
+  markers: PercentileMarkers = {},
+): number {
+  const markerEntries = (Object.keys(PERCENTILE_COLORS) as (keyof typeof PERCENTILE_COLORS)[])
+    .map((key) => ({ key, value: markers[key] }))
+    .filter((entry): entry is { key: keyof typeof PERCENTILE_COLORS; value: number } =>
+      typeof entry.value === "number" && entry.value > 0,
+    );
+  // The percentile lines must stay inside the plot, so they raise the y scale.
+  const peak = Math.max(
+    ...points.map((p) => p.avgMs),
+    ...markerEntries.map((entry) => entry.value),
+    0,
+  );
+  const yTicks = niceTicks(peak);
+  const plot = panelFrame(
+    doc,
+    x,
+    startY,
+    w,
+    h,
+    "TIEMPO DE RESPUESTA (MS)",
+    COLORS.seriesGreen,
+    points,
+    yTicks,
+    "",
+  );
+  if (!plot) return startY + h;
+  const maxY = yTicks.at(-1) ?? 1;
+  const atY = (value: number): number => plot.axisBottom - (value / maxY) * plot.plotH;
+
+  const series = points.map((p, i) => ({ x: plot.atX(i), y: atY(p.avgMs) }));
+  fillUnderSeries(doc, plot, series, COLORS.seriesGreen);
+
+  markerEntries.forEach(({ key, value }, i) => {
+    const yy = atY(value);
+    const color = PERCENTILE_COLORS[key];
+    doc
+      .moveTo(plot.axisLeft, yy)
+      .lineTo(plot.axisRight, yy)
+      .strokeColor(color)
+      .lineWidth(0.8)
+      .dash(2, { space: 2 })
+      .stroke()
+      .undash();
+    const label = `${PERCENTILE_LABELS[key]} ${fmtNum(Math.round(value))} ms`;
+    doc.font("Helvetica-Bold").fontSize(6);
+    const labelW = doc.widthOfString(label) + 6;
+    // Percentiles cluster together on the y axis, so their labels are spread
+    // along x instead of stacking on top of each other at the plot's edge.
+    const lane = markerEntries.length > 1 ? i / (markerEntries.length - 1) : 0;
+    const labelX = plot.axisLeft + 4 + lane * (plot.plotW - labelW - 8);
+    doc.rect(labelX, yy - 7.5, labelW, 8).fillOpacity(0.85).fill(COLORS.panelBg).fillOpacity(1);
+    doc.fillColor(color).text(label, labelX + 3, yy - 6);
+  });
+
+  doc.strokeColor(COLORS.seriesGreen).lineWidth(1.6);
+  seriesPath(doc, series);
+  doc.stroke();
+
+  points.forEach((p, i) => {
+    const point = series[i];
+    if (!point) return;
+    const failing = (p.errorCount ?? 0) > 0;
+    doc.circle(point.x, point.y, failing ? 3 : 2).fill(failing ? COLORS.seriesRed : COLORS.seriesGreen);
+  });
+
+  const legendY = startY + h - 14;
+  let legendX = legendItem(doc, x + 10, legendY, COLORS.seriesGreen, "Promedio por intervalo");
+  for (const { key } of markerEntries)
+    legendX = legendItem(doc, legendX, legendY, PERCENTILE_COLORS[key], PERCENTILE_LABELS[key]);
+  if (points.some((p) => (p.errorCount ?? 0) > 0))
+    legendItem(doc, legendX, legendY, COLORS.seriesRed, "Con errores");
+
+  return startY + h;
+}
+
+const PERCENTILE_LABELS = {
+  medianMs: "Mediana",
+  p90Ms: "p90",
+  p95Ms: "p95",
+  p99Ms: "p99",
+} as const;
+
+/**
+ * Grafana-style panel of throughput over the run, drawn as bars stacked into
+ * successful (blue) and failed (red) transactions per second, with the run's
+ * average marked. Returns the y position right after the chart.
+ */
+export function throughputChart(
   doc: Doc,
   x: number,
   startY: number,
@@ -303,137 +543,59 @@ export function timeSeriesChart(
   h: number,
   points: ChartPoint[],
 ): number {
-  doc.roundedRect(x, startY, w, h, 4).fillAndStroke(COLORS.white, COLORS.grayBorder);
-  if (!points.length) {
-    doc
-      .font("Helvetica")
-      .fontSize(8)
-      .fillColor(COLORS.grayMid)
-      .text("Sin datos suficientes para graficar la línea de tiempo.", x, startY + h / 2 - 4, {
-        width: w,
-        align: "center",
-      });
-    return startY + h;
-  }
+  const rates = points.map((p) => {
+    const perSecond = Math.max(1, p.bucketSeconds ?? 1);
+    const errors = Math.min(p.count, p.errorCount ?? 0);
+    return { ok: (p.count - errors) / perSecond, failed: errors / perSecond };
+  });
+  const yTicks = niceTicks(Math.max(...rates.map((r) => r.ok + r.failed), 0));
+  const plot = panelFrame(
+    doc,
+    x,
+    startY,
+    w,
+    h,
+    "TRANSACCIONES POR SEGUNDO",
+    COLORS.seriesBlue,
+    points,
+    yTicks,
+    "",
+  );
+  if (!plot) return startY + h;
+  const maxY = yTicks.at(-1) ?? 1;
+  const scale = (value: number): number => (value / maxY) * plot.plotH;
 
-  const axisLeft = x + 34;
-  const axisRight = x + w - 34;
-  const axisTop = startY + 14;
-  const axisBottom = startY + h - 26;
-  const plotW = axisRight - axisLeft;
-  const plotH = axisBottom - axisTop;
-  const countTicks = niceTicks(Math.max(...points.map((p) => p.count)));
-  const msTicks = niceTicks(Math.max(...points.map((p) => p.avgMs)));
-  const maxCount = countTicks.at(-1) ?? 1;
-  const maxMs = msTicks.at(-1) ?? 1;
-  const slot = plotW / points.length;
-  const barW = Math.min(20, slot * 0.55);
-
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(7)
-    .fillColor(COLORS.chartBar)
-    .text("TRANSACCIONES", x + 8, startY + 5, { width: plotW / 2, align: "left" });
-  doc
-    .fillColor(COLORS.amberWarn)
-    .text("TIEMPO DE RESPUESTA (MS)", x, startY + 5, { width: w - 8, align: "right" });
-
-  const tickCount = Math.max(countTicks.length, msTicks.length) - 1;
-  for (let i = 0; i <= tickCount; i += 1) {
-    const yy = axisBottom - (plotH * i) / tickCount;
-    doc
-      .moveTo(axisLeft, yy)
-      .lineTo(axisRight, yy)
-      .strokeColor(i === 0 ? COLORS.grayBorder : COLORS.grayLight)
-      .lineWidth(0.5)
-      .stroke();
-    const countValue = countTicks[i];
-    if (countValue !== undefined)
-      doc
-        .font("Helvetica")
-        .fontSize(7)
-        .fillColor(COLORS.grayMid)
-        .text(fmtNum(countValue), x, yy - 3, { width: axisLeft - x - 4, align: "right" });
-    const msValue = msTicks[i];
-    if (msValue !== undefined)
-      doc.text(fmtNum(msValue), axisRight + 4, yy - 3, { width: x + w - axisRight - 6, align: "left" });
-  }
-
-  const barRadius = Math.min(3, barW / 2);
-  points.forEach((p, i) => {
-    const barH = Math.max(1, (p.count / maxCount) * plotH);
-    const cx = axisLeft + slot * i + slot / 2;
-    doc
-      .roundedRect(cx - barW / 2, axisBottom - barH, barW, barH, barRadius)
-      .fillOpacity(0.85)
-      .fill(COLORS.chartBar)
-      .fillOpacity(1);
+  const slot = plot.plotW / Math.max(1, points.length);
+  const barW = Math.max(1.5, Math.min(18, slot * 0.6));
+  rates.forEach((rate, i) => {
+    const left = plot.atX(i) - barW / 2;
+    const okH = scale(rate.ok);
+    const failedH = scale(rate.failed);
+    doc.fillOpacity(0.85);
+    if (okH > 0) doc.rect(left, plot.axisBottom - okH, barW, okH).fill(COLORS.seriesBlue);
+    if (failedH > 0)
+      doc.rect(left, plot.axisBottom - okH - failedH, barW, failedH).fill(COLORS.seriesRed);
+    doc.fillOpacity(1);
   });
 
-  const linePoints = points.map((p, i) => ({
-    x: axisLeft + slot * i + slot / 2,
-    y: axisBottom - (p.avgMs / maxMs) * plotH,
-  }));
-
-  if (linePoints.length > 1) {
-    const first = linePoints[0];
-    const last = linePoints.at(-1);
-    if (first && last) {
-      doc.moveTo(first.x, axisBottom).lineTo(first.x, first.y);
-      for (let i = 1; i < linePoints.length; i += 1) {
-        const prev = linePoints[i - 1];
-        const curr = linePoints[i];
-        if (!prev || !curr) continue;
-        const midX = (prev.x + curr.x) / 2;
-        doc.bezierCurveTo(midX, prev.y, midX, curr.y, curr.x, curr.y);
-      }
-      doc.lineTo(last.x, axisBottom).closePath().fillOpacity(0.12).fill(COLORS.amberWarn).fillOpacity(1);
-    }
-  }
-
-  doc.strokeColor(COLORS.amberWarn).lineWidth(1.8);
-  linePoints.forEach((p, i) => {
-    if (i === 0) doc.moveTo(p.x, p.y);
-    else {
-      const prev = linePoints[i - 1];
-      if (!prev) return;
-      const midX = (prev.x + p.x) / 2;
-      doc.bezierCurveTo(midX, prev.y, midX, p.y, p.x, p.y);
-    }
-  });
-  doc.stroke();
-  linePoints.forEach((p) => {
-    doc.circle(p.x, p.y, 2.6).fill(COLORS.amberWarn);
-    doc.circle(p.x, p.y, 1.1).fill(COLORS.white);
-  });
-
-  const labelIndexes = new Set([0, Math.floor((points.length - 1) / 2), points.length - 1]);
-  for (const i of labelIndexes) {
-    const p = points[i];
-    if (!p) continue;
-    const px = axisLeft + slot * i + slot / 2;
-    doc
-      .moveTo(px, axisBottom)
-      .lineTo(px, axisBottom + 3)
-      .strokeColor(COLORS.grayBorder)
-      .lineWidth(0.5)
-      .stroke();
-    doc
-      .font("Helvetica")
-      .fontSize(7)
-      .fillColor(COLORS.grayMid)
-      .text(`${p.tSeconds}s`, px - 16, axisBottom + 5, { width: 32, align: "center" });
-  }
-
-  const legendY = startY + h - 13;
-  doc.roundedRect(x + 8, legendY, 8, 8, 2).fill(COLORS.chartBar);
+  const totalOk = points.reduce((sum, p) => sum + (p.count - Math.min(p.count, p.errorCount ?? 0)), 0);
+  const totalFailed = points.reduce((sum, p) => sum + Math.min(p.count, p.errorCount ?? 0), 0);
+  const avgTps =
+    rates.reduce((sum, rate) => sum + rate.ok + rate.failed, 0) / Math.max(1, rates.length);
+  const avgY = plot.axisBottom - scale(avgTps);
   doc
-    .font("Helvetica")
-    .fontSize(7)
-    .fillColor(COLORS.grayMid)
-    .text("Transacciones por intervalo", x + 20, legendY);
-  doc.roundedRect(x + 165, legendY, 8, 8, 2).fill(COLORS.amberWarn);
-  doc.text("Tiempo de respuesta promedio (ms)", x + 177, legendY);
+    .moveTo(plot.axisLeft, avgY)
+    .lineTo(plot.axisRight, avgY)
+    .strokeColor(COLORS.percentileP95)
+    .lineWidth(0.8)
+    .dash(2, { space: 2 })
+    .stroke()
+    .undash();
+
+  const legendY = startY + h - 14;
+  let legendX = legendItem(doc, x + 10, legendY, COLORS.seriesBlue, `Correctas (${fmtNum(totalOk)})`);
+  legendX = legendItem(doc, legendX, legendY, COLORS.seriesRed, `Con error (${fmtNum(totalFailed)})`);
+  legendItem(doc, legendX, legendY, COLORS.percentileP95, `Promedio ${avgTps.toFixed(2)} req/s`);
 
   return startY + h;
 }

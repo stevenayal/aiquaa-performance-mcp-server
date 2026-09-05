@@ -23,6 +23,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=900)
     parser.add_argument("--timeout-seconds", type=int, default=30)
     parser.add_argument("--full-page", action="store_true")
+    parser.add_argument(
+        "--ready-timeout-seconds",
+        type=float,
+        default=120.0,
+        help="Max time to wait for the dashboard to finish booting and render its panels.",
+    )
     return parser.parse_args()
 
 
@@ -43,13 +49,70 @@ def build_driver(width: int, height: int, timeout_seconds: int):
     return driver
 
 
+# Splash text shown by a Grafana Cloud stack that is still booting. Free-tier
+# stacks sleep when idle and can take a minute or more to wake, so a fixed wait
+# captures the loading screen instead of the dashboard.
+BOOTING_MARKERS = (
+    "is loading",
+    "instance is loading",
+    "will be ready shortly",
+)
+
+
+def is_booting(driver) -> bool:
+    try:
+        text = driver.find_element("tag name", "body").text.lower()
+    except Exception:  # noqa: BLE001 - page not ready yet; treat as still booting
+        return True
+    return any(marker in text for marker in BOOTING_MARKERS)
+
+
+def wait_until_ready(driver, ready_timeout_seconds: float) -> float:
+    """Blocks until the dashboard stops showing a boot splash. Returns seconds waited."""
+    deadline = time.monotonic() + ready_timeout_seconds
+    start = time.monotonic()
+    while time.monotonic() < deadline:
+        if not is_booting(driver):
+            break
+        time.sleep(2)
+        driver.refresh()
+    return time.monotonic() - start
+
+
+# Grafana marks each panel with a data-testid and shows a loading bar inside it
+# while its query is still running, so a screenshot taken before those clear
+# catches empty panels even though the stack itself is already up.
+PANELS_RENDERED_JS = """
+const panels = document.querySelectorAll('[data-testid^="data-testid Panel"]');
+const loading = document.querySelectorAll('[data-testid="data-testid Panel loading bar"]');
+const drawn = document.querySelectorAll('svg, canvas');
+return panels.length > 0 && loading.length === 0 && drawn.length > 0;
+"""
+
+
+def wait_for_panels(driver, timeout_seconds: float) -> bool:
+    """Blocks until every panel has finished loading. Returns whether they did."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            if driver.execute_script(PANELS_RENDERED_JS):
+                return True
+        except Exception:  # noqa: BLE001 - page still settling; retry until the deadline
+            pass
+        time.sleep(1)
+    return False
+
+
 def capture(url: str, output: str, wait_seconds: float, width: int, height: int,
-            timeout_seconds: int, full_page: bool) -> dict:
+            timeout_seconds: int, full_page: bool, ready_timeout_seconds: float) -> dict:
     driver = build_driver(width, height, timeout_seconds)
     try:
         driver.get(url)
-        # Dashboards like Grafana render panels asynchronously after load;
-        # give them time to finish drawing before capturing.
+        boot_seconds = wait_until_ready(driver, ready_timeout_seconds)
+        still_booting = is_booting(driver)
+        panels_rendered = wait_for_panels(driver, max(wait_seconds, 30.0))
+        # Panel animations keep running for a moment after the queries resolve,
+        # so settle before the screenshot even once everything reports ready.
         time.sleep(wait_seconds)
         os.makedirs(os.path.dirname(os.path.abspath(output)) or ".", exist_ok=True)
         captured_full_page = False
@@ -68,6 +131,9 @@ def capture(url: str, output: str, wait_seconds: float, width: int, height: int,
             "widthPx": size.get("width", width),
             "heightPx": size.get("height", height),
             "fullPage": captured_full_page,
+            "bootWaitSeconds": round(boot_seconds, 1),
+            "stillBooting": still_booting,
+            "panelsRendered": panels_rendered,
         }
     finally:
         driver.quit()
@@ -84,6 +150,7 @@ def main() -> int:
             args.height,
             args.timeout_seconds,
             args.full_page,
+            args.ready_timeout_seconds,
         )
     except Exception as error:  # noqa: BLE001 - surfaced as a structured error to the caller
         sys.stderr.write(json.dumps({"error": str(error)}) + "\n")
