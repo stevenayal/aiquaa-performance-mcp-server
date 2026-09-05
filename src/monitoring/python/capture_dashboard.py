@@ -79,6 +79,30 @@ def wait_until_ready(driver, ready_timeout_seconds: float) -> float:
     return time.monotonic() - start
 
 
+# Grafana marks each panel with a data-testid and shows a loading bar inside it
+# while its query is still running, so a screenshot taken before those clear
+# catches empty panels even though the stack itself is already up.
+PANELS_RENDERED_JS = """
+const panels = document.querySelectorAll('[data-testid^="data-testid Panel"]');
+const loading = document.querySelectorAll('[data-testid="data-testid Panel loading bar"]');
+const drawn = document.querySelectorAll('svg, canvas');
+return panels.length > 0 && loading.length === 0 && drawn.length > 0;
+"""
+
+
+def wait_for_panels(driver, timeout_seconds: float) -> bool:
+    """Blocks until every panel has finished loading. Returns whether they did."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            if driver.execute_script(PANELS_RENDERED_JS):
+                return True
+        except Exception:  # noqa: BLE001 - page still settling; retry until the deadline
+            pass
+        time.sleep(1)
+    return False
+
+
 def capture(url: str, output: str, wait_seconds: float, width: int, height: int,
             timeout_seconds: int, full_page: bool, ready_timeout_seconds: float) -> dict:
     driver = build_driver(width, height, timeout_seconds)
@@ -86,8 +110,9 @@ def capture(url: str, output: str, wait_seconds: float, width: int, height: int,
         driver.get(url)
         boot_seconds = wait_until_ready(driver, ready_timeout_seconds)
         still_booting = is_booting(driver)
-        # Panels also render asynchronously once the stack is up, so keep a
-        # short settle wait after the splash clears.
+        panels_rendered = wait_for_panels(driver, max(wait_seconds, 30.0))
+        # Panel animations keep running for a moment after the queries resolve,
+        # so settle before the screenshot even once everything reports ready.
         time.sleep(wait_seconds)
         os.makedirs(os.path.dirname(os.path.abspath(output)) or ".", exist_ok=True)
         captured_full_page = False
@@ -108,6 +133,7 @@ def capture(url: str, output: str, wait_seconds: float, width: int, height: int,
             "fullPage": captured_full_page,
             "bootWaitSeconds": round(boot_seconds, 1),
             "stillBooting": still_booting,
+            "panelsRendered": panels_rendered,
         }
     finally:
         driver.quit()
