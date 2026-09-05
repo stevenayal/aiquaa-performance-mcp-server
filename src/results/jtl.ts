@@ -8,12 +8,14 @@ interface Sample {
   code: string;
   message: string;
   bytes: number;
+  url: string;
 }
 export interface TimelineBucket {
   tSeconds: number;
   count: number;
   errorCount: number;
   avgMs: number;
+  bucketSeconds: number;
 }
 
 /** Buckets raw samples by elapsed time for a transactions/response-time-over-time chart. */
@@ -48,6 +50,7 @@ export function buildTimeline(content: string, maxBuckets = 24): TimelineBucket[
       count: entry?.count ?? 0,
       errorCount: entry?.errors ?? 0,
       avgMs: entry && entry.count ? Math.round(entry.totalMs / entry.count) : 0,
+      bucketSeconds,
     };
   });
 }
@@ -110,6 +113,7 @@ function summary(
     p99Ms: percentile(elapsed, 99),
     bytes: samples.reduce((sum, s) => sum + s.bytes, 0),
     verdict: "NOT_EXECUTED",
+    ...(samples.find((s) => s.url)?.url ? { endpoint: samples.find((s) => s.url)?.url } : {}),
   };
   metric.verdict = verdict(
     metric,
@@ -157,6 +161,7 @@ function parseSample(headers: string[], row: string[]): Sample | undefined {
     code: get("responseCode", "code") ?? "",
     message: get("responseMessage", "message") ?? "",
     bytes: Number(get("bytes")) || 0,
+    url: get("URL", "url") ?? "",
   };
 }
 function parseCsv(input: string): string[][] {

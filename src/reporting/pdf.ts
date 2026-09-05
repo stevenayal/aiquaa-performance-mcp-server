@@ -15,9 +15,10 @@ import {
   metaTable,
   newDocument,
   pageContentWidth,
+  responseTimeChart,
   statBand,
   subtitle,
-  timeSeriesChart,
+  throughputChart,
   title,
 } from "./pdf-kit.js";
 import { JMETER_LOGO_SVG } from "./jmeter-logo.js";
@@ -106,6 +107,32 @@ function comparisonTable(doc: Doc, x: number, y: number, w: number, comparison: 
       { header: "Línea base", weight: 0.23, align: "center" },
       { header: "Esta corrida", weight: 0.23, align: "center" },
       { header: "Cambio", weight: 0.24, align: "center" },
+    ],
+    rows,
+  );
+}
+
+function endpointsTable(doc: Doc, x: number, startY: number, w: number, summary: JtlSummary): number {
+  const rows = summary.operations
+    .filter((op) => op.endpoint || op.method)
+    .map((op) => [op.label, op.method ?? "—", op.endpoint ?? "—"]);
+  if (!rows.length) return startY;
+  let y = ensureSpace(doc, startY, 40);
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(13)
+    .fillColor(COLORS.grayDark)
+    .text("Endpoints invocados", x, y);
+  y += 20;
+  return dataTable(
+    doc,
+    x,
+    y,
+    w,
+    [
+      { header: "Sampler", weight: 0.28 },
+      { header: "Verbo", weight: 0.12, align: "center" },
+      { header: "Endpoint", weight: 0.6 },
     ],
     rows,
   );
@@ -280,12 +307,28 @@ export async function buildPdfReport(options: ReportOptions): Promise<Buffer> {
       .font("Helvetica-Bold")
       .fontSize(12)
       .fillColor(COLORS.grayDark)
-      .text("Transacciones y tiempo de respuesta durante la ejecución", MARGIN, y);
+      .text("Tiempo de respuesta durante la ejecución", MARGIN, y);
     y += 16;
-    y = timeSeriesChart(doc, MARGIN, y, w, 135, timeline);
+    y = responseTimeChart(doc, MARGIN, y, w, 140, timeline, {
+      medianMs: summary.medianMs,
+      p90Ms: summary.p90Ms,
+      p95Ms: summary.p95Ms,
+      p99Ms: summary.p99Ms,
+    });
+    y += 16;
+
+    y = ensureSpace(doc, y, 140);
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .fillColor(COLORS.grayDark)
+      .text("Transacciones por segundo durante la ejecución", MARGIN, y);
+    y += 16;
+    y = throughputChart(doc, MARGIN, y, w, 120, timeline);
     y += 14;
   }
 
+  y = endpointsTable(doc, MARGIN, y, w, summary);
   y = samplerTable(doc, MARGIN, y, w, summary);
   y = errorsTable(doc, MARGIN, y, w, summary.errors);
   if (monitoringEvidence?.length) monitoringEvidenceSection(doc, MARGIN, y, w, monitoringEvidence);

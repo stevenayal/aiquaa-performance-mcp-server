@@ -1,9 +1,16 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
+/** An HTTP sampler's declared verb and path, keyed by its JMeter test name. */
+export interface SamplerRequest {
+  name: string;
+  method: string;
+  path: string;
+}
 export interface JmxInventory {
   valid: boolean;
   errors: string[];
   samplers: string[];
+  requests: SamplerRequest[];
   threadGroups: number;
   csvDataSets: number;
   extractors: string[];
@@ -28,7 +35,15 @@ export function parseJmx(xml: string): JmxInventory {
   visit(document, (name, value) => {
     const record = asRecord(value);
     const label = stringAttr(record, "@_testname");
-    if (name === "HTTPSamplerProxy") inventory.samplers.push(label || "HTTP Request");
+    if (name === "HTTPSamplerProxy") {
+      const samplerName = label || "HTTP Request";
+      inventory.samplers.push(samplerName);
+      inventory.requests.push({
+        name: samplerName,
+        method: stringProp(record, "HTTPSampler.method"),
+        path: stringProp(record, "HTTPSampler.path"),
+      });
+    }
     if (/ThreadGroup$/.test(name)) inventory.threadGroups += 1;
     if (name === "CSVDataSet") inventory.csvDataSets += 1;
     if (/Extractor$/.test(name)) inventory.extractors.push(label || name);
@@ -50,6 +65,7 @@ function empty(errors: string[]): JmxInventory {
     valid: false,
     errors,
     samplers: [],
+    requests: [],
     threadGroups: 0,
     csvDataSets: 0,
     extractors: [],
@@ -65,6 +81,18 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 function stringAttr(value: Record<string, unknown>, key: string): string {
   return typeof value[key] === "string" ? value[key] : "";
+}
+/** Reads a `<stringProp name="key">value</stringProp>` child of a parsed element. */
+function stringProp(element: Record<string, unknown>, key: string): string {
+  const raw = element["stringProp"];
+  const props = Array.isArray(raw) ? raw : [raw];
+  for (const prop of props) {
+    const record = asRecord(prop);
+    if (stringAttr(record, "@_name") !== key) continue;
+    const text = record["#text"];
+    return typeof text === "string" ? text : "";
+  }
+  return "";
 }
 function visit(value: unknown, action: (name: string, value: unknown) => void): void {
   if (Array.isArray(value)) {
