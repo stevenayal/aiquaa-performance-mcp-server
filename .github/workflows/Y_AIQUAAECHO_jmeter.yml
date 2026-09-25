@@ -1,0 +1,99 @@
+name: JMeter AIQUAAECHO
+on:
+  workflow_dispatch:
+    inputs:
+      threads:
+        description: Usuarios concurrentes (closed workload)
+        required: false
+        default: '20'
+      duration:
+        description: Duración en segundos
+        required: false
+        default: '300'
+      target_per_min:
+        description: Throughput objetivo total en req/min (rate limit de la ruta = 3000)
+        required: false
+        default: '2400'
+      delay_ms:
+        description: Latencia artificial del echo (delayMs, 0-5000)
+        required: false
+        default: '0'
+      monitoring_dashboard_url:
+        description: >-
+          URL pública de dashboard de monitoreo (Grafana, etc.) a capturar como evidencia
+          post-ejecución; dejar vacío para omitir la captura.
+        required: false
+        default: ''
+permissions:
+  contents: read
+jobs:
+  performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install JMeter
+        run: |
+          curl --fail --location --silent --show-error https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz -o jmeter.tgz
+          tar -xzf jmeter.tgz
+      - name: Run headless
+        # The sandbox rejects requests without x-api-key, so the key comes from
+        # the AIQUAA_API_KEY secret and is passed as a JMeter property; it is
+        # never written to the plan or the properties file.
+        env:
+          AIQUAA_API_KEY: ${{ secrets.AIQUAA_API_KEY }}
+        run: |
+          if [ -z "$AIQUAA_API_KEY" ]; then echo "::error::Falta el secret AIQUAA_API_KEY"; exit 1; fi
+          mkdir -p test-results/performance/dashboard
+          apache-jmeter-5.6.3/bin/jmeter -n -t tests/performance/plans/P_AIQUAAECHO.jmx \
+            -q tests/performance/properties/sandbox.properties \
+            -JapiKey="$AIQUAA_API_KEY" \
+            -Jthreads="${{ inputs.threads }}" -Jduration="${{ inputs.duration }}" \
+            -JtargetPerMin="${{ inputs.target_per_min }}" -JdelayMs="${{ inputs.delay_ms }}" \
+            -l test-results/performance/R_AIQUAAECHO.jtl -e -o test-results/performance/dashboard
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Evaluate thresholds
+        run: node dist/server.js --evaluate test-results/performance/R_AIQUAAECHO.jtl tests/performance/thresholds/thresholds_AIQUAAECHO.json
+      - name: Set up Python
+        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install monitoring capture dependencies
+        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        run: pip install -r src/monitoring/python/requirements.txt
+      - name: Capture monitoring dashboard evidence
+        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        run: |
+          mkdir -p test-results/performance/evidence
+          python3 src/monitoring/python/capture_dashboard.py \
+            --url "${{ inputs.monitoring_dashboard_url }}" \
+            --output test-results/performance/evidence/EVIDENCIA_MONITOREO.png \
+            --wait-seconds 8 \
+            --ready-timeout-seconds 180
+      - name: Generate PDF report
+        if: always()
+        run: |
+          EVIDENCE_ARGS=()
+          if [ -f test-results/performance/evidence/EVIDENCIA_MONITOREO.png ]; then
+            EVIDENCE_ARGS=(--evidence-image test-results/performance/evidence/EVIDENCIA_MONITOREO.png \
+              --evidence-label "Dashboard de monitoreo" \
+              --evidence-url "${{ inputs.monitoring_dashboard_url }}")
+          fi
+          node dist/server.js --report test-results/performance/R_AIQUAAECHO.jtl tests/performance/thresholds/thresholds_AIQUAAECHO.json test-results/performance/INFORME_PERF_AIQUAAECHO.pdf \
+            --api-name "aiquaa Sandbox API — GET /api/perf/echo" --test-type load --threads "${{ inputs.threads }}" \
+            --repo-url https://aiquaa-sandbox-api.vercel.app/docs/perf --plan tests/performance/plans/P_AIQUAAECHO.jmx "${EVIDENCE_ARGS[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jmeter-AIQUAAECHO
+          path: test-results/performance
