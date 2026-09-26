@@ -44,6 +44,10 @@ jobs:
         # The sandbox rejects requests without x-api-key, so the key comes from
         # the AIQUAA_API_KEY secret and is passed as a JMeter property; it is
         # never written to the plan or the properties file.
+        # The plan's Simple Data Writer defaults to the same path as -l; two
+        # writers with different columns on one file leave a headerless JTL
+        # that neither the HTML dashboard nor the report can read, so its
+        # output is redirected and -l stays the single canonical JTL.
         env:
           AIQUAA_API_KEY: ${{ secrets.AIQUAA_API_KEY }}
         run: |
@@ -54,6 +58,7 @@ jobs:
             -JapiKey="$AIQUAA_API_KEY" \
             -Jthreads="${{ inputs.threads }}" -Jduration="${{ inputs.duration }}" \
             -JtargetPerMin="${{ inputs.target_per_min }}" -JdelayMs="${{ inputs.delay_ms }}" \
+            -JjtlFile=test-results/performance/plan-writer.jtl \
             -l test-results/performance/R_AIQUAAECHO.jtl -e -o test-results/performance/dashboard
       - name: Set up Python
         if: always()
