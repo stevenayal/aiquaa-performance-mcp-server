@@ -68,6 +68,7 @@ jobs:
             --url "${{ inputs.monitoring_dashboard_url }}" \
             --output test-results/performance/evidence/EVIDENCIA_MONITOREO.png \
             --wait-seconds 8 \
+            --height 2400 \
             --ready-timeout-seconds 180
       - name: Generate PDF report and evaluate thresholds
         # Writes the PDF first and only then exits 1 when thresholds fail, so

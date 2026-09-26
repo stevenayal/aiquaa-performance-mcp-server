@@ -23,7 +23,7 @@ on:
           URL pública de dashboard de monitoreo (Grafana, etc.) a capturar como evidencia
           post-ejecución; dejar vacío para omitir la captura.
         required: false
-        default: ''
+        default: https://purplespinach239.grafana.net/public-dashboards/32c376cff7ef437faa3435bd863f5a79
 permissions:
   contents: read
 jobs:
@@ -87,6 +87,7 @@ jobs:
             --url "${{ inputs.monitoring_dashboard_url }}" \
             --output test-results/performance/evidence/EVIDENCIA_MONITOREO.png \
             --wait-seconds 8 \
+            --height 2400 \
             --ready-timeout-seconds 180
       - name: Generate PDF report and evaluate thresholds
         # Writes the PDF first and only then exits 1 when thresholds fail, so
