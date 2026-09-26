@@ -1,0 +1,9 @@
+{
+  "global": {
+    "scope": "global",
+    "maxErrorRate": 1,
+    "p95Ms": 800,
+    "p99Ms": 1500
+  },
+  "operations": {}
+}
