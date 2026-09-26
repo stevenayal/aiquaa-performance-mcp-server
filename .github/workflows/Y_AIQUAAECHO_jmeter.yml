@@ -108,7 +108,16 @@ jobs:
             --threads "${{ inputs.threads }}" --target-per-min "${{ inputs.target_per_min }}" \
             --plan tests/performance/plans/P_AIQUAAECHO.jmx \
             --repo-url https://aiquaa-sandbox-api.vercel.app/docs/perf "${EVIDENCE_ARGS[@]}"
-      - uses: actions/upload-artifact@v4
+      - name: Upload PDF report (opens in the browser)
+        # archive: false uploads the PDF as-is instead of zipped, so it can be
+        # opened straight from the run page without downloading a zip.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          path: test-results/performance/INFORME_PERF_AIQUAAECHO.pdf
+          archive: false
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: jmeter-AIQUAAECHO
