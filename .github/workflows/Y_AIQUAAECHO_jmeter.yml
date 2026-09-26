@@ -55,24 +55,27 @@ jobs:
             -Jthreads="${{ inputs.threads }}" -Jduration="${{ inputs.duration }}" \
             -JtargetPerMin="${{ inputs.target_per_min }}" -JdelayMs="${{ inputs.delay_ms }}" \
             -l test-results/performance/R_AIQUAAECHO.jtl -e -o test-results/performance/dashboard
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - name: Evaluate thresholds
-        run: node dist/server.js --evaluate test-results/performance/R_AIQUAAECHO.jtl tests/performance/thresholds/thresholds_AIQUAAECHO.json
       - name: Set up Python
-        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        if: always()
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            src/reporting/python/requirements.txt
+            src/monitoring/python/requirements.txt
+      - name: Install report dependencies
+        if: always()
+        run: pip install -r src/reporting/python/requirements.txt
       - name: Install monitoring capture dependencies
-        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        if: ${{ always() && inputs.monitoring_dashboard_url != '' }}
         run: pip install -r src/monitoring/python/requirements.txt
       - name: Capture monitoring dashboard evidence
-        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        # Chrome ships preinstalled on GitHub-hosted ubuntu-latest runners, so
+        # Selenium Manager resolves a matching driver on its own. A failed
+        # capture must not block the report, hence continue-on-error.
+        if: ${{ always() && inputs.monitoring_dashboard_url != '' }}
+        continue-on-error: true
         run: |
           mkdir -p test-results/performance/evidence
           python3 src/monitoring/python/capture_dashboard.py \
@@ -80,7 +83,9 @@ jobs:
             --output test-results/performance/evidence/EVIDENCIA_MONITOREO.png \
             --wait-seconds 8 \
             --ready-timeout-seconds 180
-      - name: Generate PDF report
+      - name: Generate PDF report and evaluate thresholds
+        # Writes the PDF first and only then exits 1 when thresholds fail, so
+        # the report is uploaded either way and the job still goes red.
         if: always()
         run: |
           EVIDENCE_ARGS=()
@@ -89,9 +94,15 @@ jobs:
               --evidence-label "Dashboard de monitoreo" \
               --evidence-url "${{ inputs.monitoring_dashboard_url }}")
           fi
-          node dist/server.js --report test-results/performance/R_AIQUAAECHO.jtl tests/performance/thresholds/thresholds_AIQUAAECHO.json test-results/performance/INFORME_PERF_AIQUAAECHO.pdf \
-            --api-name "aiquaa Sandbox API — GET /api/perf/echo" --test-type load --threads "${{ inputs.threads }}" \
-            --repo-url https://aiquaa-sandbox-api.vercel.app/docs/perf --plan tests/performance/plans/P_AIQUAAECHO.jmx "${EVIDENCE_ARGS[@]}"
+          python3 src/reporting/python/generate_report.py \
+            --jtl test-results/performance/R_AIQUAAECHO.jtl \
+            --thresholds tests/performance/thresholds/thresholds_AIQUAAECHO.json \
+            --output test-results/performance/INFORME_PERF_AIQUAAECHO.pdf \
+            --summary-json test-results/performance/summary.json \
+            --api-name "aiquaa Sandbox API — GET /api/perf/echo" --test-type load \
+            --threads "${{ inputs.threads }}" --target-per-min "${{ inputs.target_per_min }}" \
+            --plan tests/performance/plans/P_AIQUAAECHO.jmx \
+            --repo-url https://aiquaa-sandbox-api.vercel.app/docs/perf "${EVIDENCE_ARGS[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
