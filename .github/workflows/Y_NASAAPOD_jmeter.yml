@@ -26,36 +26,42 @@ jobs:
           tar -xzf jmeter.tgz
       - name: Run headless
         # api.nasa.gov is public; the plan's host/port/protocol properties
-        # already default to it from perf_generar, so no PERF_BASE_URL
-        # secret is needed for this specific smoke target.
+        # already default to it. The key falls back to NASA's public DEMO_KEY
+        # (30 req/h per IP, enough for this smoke) unless a NASA_API_KEY
+        # secret exists.
+        # The plan's Simple Data Writer defaults to the same path as -l; two
+        # writers with different columns on one file leave a headerless JTL
+        # that neither the HTML dashboard nor the report can read, so its
+        # output is redirected and -l stays the single canonical JTL.
+        env:
+          NASA_API_KEY: ${{ secrets.NASA_API_KEY }}
         run: |
           mkdir -p test-results/performance/dashboard
-          apache-jmeter-5.6.3/bin/jmeter -n -t tests/performance/plans/P_NASAAPOD.jmx -l test-results/performance/R_NASAAPOD.jtl -e -o test-results/performance/dashboard
-      # This workflow tests aiquaa-performance-mcp-server's own code, so it
-      # builds the checked-out PR rather than `npx -y aiquaa-performance-mcp-server`
-      # (which would run whatever was last published to npm, missing --report
-      # or any other change under review here).
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - name: Evaluate thresholds
-        run: node dist/server.js --evaluate test-results/performance/R_NASAAPOD.jtl tests/performance/thresholds/thresholds.json
+          apache-jmeter-5.6.3/bin/jmeter -n -t tests/performance/plans/P_NASAAPOD.jmx \
+            -JapiKey="${NASA_API_KEY:-DEMO_KEY}" \
+            -JjtlFile=test-results/performance/plan-writer.jtl \
+            -l test-results/performance/R_NASAAPOD.jtl -e -o test-results/performance/dashboard
       - name: Set up Python
-        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        if: always()
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            src/reporting/python/requirements.txt
+            src/monitoring/python/requirements.txt
+      - name: Install report dependencies
+        if: always()
+        run: pip install -r src/reporting/python/requirements.txt
       - name: Install monitoring capture dependencies
-        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        if: ${{ always() && inputs.monitoring_dashboard_url != '' }}
         run: pip install -r src/monitoring/python/requirements.txt
       - name: Capture monitoring dashboard evidence
         # Chrome ships preinstalled on GitHub-hosted ubuntu-latest runners, so
-        # Selenium Manager (bundled with Selenium >=4.6) resolves a matching
-        # driver on its own; no extra browser/driver setup step is needed.
-        if: ${{ inputs.monitoring_dashboard_url != '' }}
+        # Selenium Manager resolves a matching driver on its own. A failed
+        # capture must not block the report, hence continue-on-error.
+        if: ${{ always() && inputs.monitoring_dashboard_url != '' }}
+        continue-on-error: true
         run: |
           mkdir -p test-results/performance/evidence
           python3 src/monitoring/python/capture_dashboard.py \
@@ -63,7 +69,10 @@ jobs:
             --output test-results/performance/evidence/EVIDENCIA_MONITOREO.png \
             --wait-seconds 8 \
             --ready-timeout-seconds 180
-      - name: Generate PDF report
+      - name: Generate PDF report and evaluate thresholds
+        # Writes the PDF first and only then exits 1 when thresholds fail, so
+        # the report is uploaded either way and the job still goes red.
+        if: always()
         run: |
           EVIDENCE_ARGS=()
           if [ -f test-results/performance/evidence/EVIDENCIA_MONITOREO.png ]; then
@@ -71,10 +80,24 @@ jobs:
               --evidence-label "Dashboard de monitoreo" \
               --evidence-url "${{ inputs.monitoring_dashboard_url }}")
           fi
-          node dist/server.js --report test-results/performance/R_NASAAPOD.jtl tests/performance/thresholds/thresholds.json test-results/performance/INFORME_PERF_NASAAPOD.pdf \
-            --api-name "NASA APOD (api.nasa.gov)" --test-type smoke --threads 1 --loops 1 \
+          python3 src/reporting/python/generate_report.py \
+            --jtl test-results/performance/R_NASAAPOD.jtl \
+            --thresholds tests/performance/thresholds/thresholds.json \
+            --output test-results/performance/INFORME_PERF_NASAAPOD.pdf \
+            --summary-json test-results/performance/summary.json \
+            --api-name "NASA APOD (api.nasa.gov)" --test-type smoke --threads 1 \
+            --plan tests/performance/plans/P_NASAAPOD.jmx \
             --repo-url https://api.nasa.gov/planetary/apod "${EVIDENCE_ARGS[@]}"
-      - uses: actions/upload-artifact@v4
+      - name: Upload PDF report (opens in the browser)
+        # archive: false uploads the PDF as-is instead of zipped, so it can be
+        # opened straight from the run page without downloading a zip.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          path: test-results/performance/INFORME_PERF_NASAAPOD.pdf
+          archive: false
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: jmeter-NASAAPOD
