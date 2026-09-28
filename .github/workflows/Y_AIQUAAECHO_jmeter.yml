@@ -6,8 +6,14 @@ on:
         description: Usuarios concurrentes (closed workload)
         required: false
         default: '20'
+      requests:
+        description: >-
+          Total de requests (se reparte entre los usuarios); 0 = sin límite, corre
+          hasta cumplir la duración
+        required: false
+        default: '1000'
       duration:
-        description: Duración en segundos
+        description: Duración máxima en segundos (tope; la prueba termina antes si llega a requests)
         required: false
         default: '300'
       target_per_min:
@@ -23,7 +29,7 @@ on:
           URL pública de dashboard de monitoreo (Grafana, etc.) a capturar como evidencia
           post-ejecución; dejar vacío para omitir la captura.
         required: false
-        default: ''
+        default: https://purplespinach239.grafana.net/public-dashboards/32c376cff7ef437faa3435bd863f5a79
 permissions:
   contents: read
 jobs:
@@ -53,10 +59,15 @@ jobs:
         run: |
           if [ -z "$AIQUAA_API_KEY" ]; then echo "::error::Falta el secret AIQUAA_API_KEY"; exit 1; fi
           mkdir -p test-results/performance/dashboard
+          # JMeter caps load by iterations per thread, so the total is split
+          # across threads (rounded up); -1 keeps looping until the duration.
+          REQUESTS="${{ inputs.requests }}"; THREADS="${{ inputs.threads }}"
+          if [ "${REQUESTS:-0}" -gt 0 ]; then LOOPS=$(( (REQUESTS + THREADS - 1) / THREADS )); else LOOPS=-1; fi
+          echo "threads=$THREADS loops=$LOOPS (~$(( LOOPS * THREADS )) requests, tope ${{ inputs.duration }} s)"
           apache-jmeter-5.6.3/bin/jmeter -n -t tests/performance/plans/P_AIQUAAECHO.jmx \
             -q tests/performance/properties/sandbox.properties \
             -JapiKey="$AIQUAA_API_KEY" \
-            -Jthreads="${{ inputs.threads }}" -Jduration="${{ inputs.duration }}" \
+            -Jthreads="$THREADS" -Jloops="$LOOPS" -Jduration="${{ inputs.duration }}" \
             -JtargetPerMin="${{ inputs.target_per_min }}" -JdelayMs="${{ inputs.delay_ms }}" \
             -JjtlFile=test-results/performance/plan-writer.jtl \
             -l test-results/performance/R_AIQUAAECHO.jtl -e -o test-results/performance/dashboard
@@ -87,6 +98,7 @@ jobs:
             --url "${{ inputs.monitoring_dashboard_url }}" \
             --output test-results/performance/evidence/EVIDENCIA_MONITOREO.png \
             --wait-seconds 8 \
+            --height 2400 \
             --ready-timeout-seconds 180
       - name: Generate PDF report and evaluate thresholds
         # Writes the PDF first and only then exits 1 when thresholds fail, so

@@ -12,6 +12,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,10 +30,27 @@ def parse_args() -> argparse.Namespace:
         default=120.0,
         help="Max time to wait for the dashboard to finish booting and render its panels.",
     )
+    parser.add_argument(
+        "--theme",
+        choices=("light", "dark", "none"),
+        default="light",
+        help="Dashboard theme to capture; light reads better on the white PDF page. "
+        "'none' leaves the URL and the browser color scheme untouched.",
+    )
     return parser.parse_args()
 
 
-def build_driver(width: int, height: int, timeout_seconds: int):
+def with_theme(url: str, theme: str) -> str:
+    """Sets Grafana's ?theme= query parameter, replacing any theme already in the URL."""
+    if theme == "none":
+        return url
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "theme"]
+    query.append(("theme", theme))
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
+def build_driver(width: int, height: int, timeout_seconds: int, theme: str):
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
 
@@ -42,6 +60,12 @@ def build_driver(width: int, height: int, timeout_seconds: int):
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    # Dashboards that follow the system color scheme ignore ?theme=, so the
+    # headless browser also reports the requested preference (0 dark, 1 light).
+    if theme != "none":
+        options.add_argument(
+            "--blink-settings=preferredColorScheme={}".format(1 if theme == "light" else 0)
+        )
     # Selenium >=4.6 resolves a matching chromedriver on its own (Selenium
     # Manager); no webdriver-manager or manual driver path is needed.
     driver = webdriver.Chrome(options=options)
@@ -82,11 +106,15 @@ def wait_until_ready(driver, ready_timeout_seconds: float) -> float:
 # Grafana marks each panel with a data-testid and shows a loading bar inside it
 # while its query is still running, so a screenshot taken before those clear
 # catches empty panels even though the stack itself is already up.
+# Panel containers exist long before their queries resolve, so "panels are on
+# the page" is not enough: every panel inside the viewport must have drawn
+# something (stat text, a chart canvas/svg or a table).
 PANELS_RENDERED_JS = """
-const panels = document.querySelectorAll('[data-testid^="data-testid Panel"]');
 const loading = document.querySelectorAll('[data-testid="data-testid Panel loading bar"]');
-const drawn = document.querySelectorAll('svg, canvas');
-return panels.length > 0 && loading.length === 0 && drawn.length > 0;
+const contents = [...document.querySelectorAll('[data-testid="data-testid panel content"]')]
+  .filter((el) => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < window.innerHeight; });
+const drawn = (el) => el.innerText.trim().length > 0 || el.querySelector('canvas, svg, table') !== null;
+return contents.length > 0 && loading.length === 0 && contents.every(drawn);
 """
 
 
@@ -104,13 +132,14 @@ def wait_for_panels(driver, timeout_seconds: float) -> bool:
 
 
 def capture(url: str, output: str, wait_seconds: float, width: int, height: int,
-            timeout_seconds: int, full_page: bool, ready_timeout_seconds: float) -> dict:
-    driver = build_driver(width, height, timeout_seconds)
+            timeout_seconds: int, full_page: bool, ready_timeout_seconds: float,
+            theme: str = "light") -> dict:
+    driver = build_driver(width, height, timeout_seconds, theme)
     try:
-        driver.get(url)
+        driver.get(with_theme(url, theme))
         boot_seconds = wait_until_ready(driver, ready_timeout_seconds)
         still_booting = is_booting(driver)
-        panels_rendered = wait_for_panels(driver, max(wait_seconds, 30.0))
+        panels_rendered = wait_for_panels(driver, max(wait_seconds, 60.0))
         # Panel animations keep running for a moment after the queries resolve,
         # so settle before the screenshot even once everything reports ready.
         time.sleep(wait_seconds)
@@ -151,6 +180,7 @@ def main() -> int:
             args.timeout_seconds,
             args.full_page,
             args.ready_timeout_seconds,
+            args.theme,
         )
     except Exception as error:  # noqa: BLE001 - surfaced as a structured error to the caller
         sys.stderr.write(json.dumps({"error": str(error)}) + "\n")
